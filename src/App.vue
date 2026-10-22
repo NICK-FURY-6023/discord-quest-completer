@@ -2,20 +2,18 @@
 import MainLayout from './components/MainLayout.vue';
 import { Pages, useGlobalState } from './composables/app-state';
 import HomeView from './pages/HomeView.vue';
+import QuestsView from './pages/QuestsView.vue';
+import SettingsView from './pages/SettingsView.vue';
 import Playground from './pages/Playground.vue';
 
-const appState = useGlobalState();
-const { page } = appState;
-
+const { page } = useGlobalState();
 </script>
 
 <template>
   <MainLayout>
-    <HomeView v-show="page === Pages.HOME"/>
-    <Playground v-show="page === Pages.PLAYGROUND"/>
+    <HomeView v-show="page === Pages.HOME" />
+    <QuestsView v-show="page === Pages.QUESTS" />
+    <SettingsView v-show="page === Pages.SETTINGS" />
+    <Playground v-show="page === Pages.PLAYGROUND" />
   </MainLayout>
 </template>
-
-<style>
-/* Global styles are managed by Tailwind CSS */
-</style>

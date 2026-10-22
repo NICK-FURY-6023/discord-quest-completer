@@ -503,6 +503,185 @@ fn write_gamelist_cache(app: AppHandle, data: String) -> Result<(), String> {
     fs::write(&path, data).map_err(|e| format!("Failed to write game list cache: {}", e))
 }
 
+
+#[tauri::command(rename_all = "snake_case")]
+fn clear_gamelist_cache(app: AppHandle) -> Result<(), String> {
+    let path = gamelist_cache_path(&app)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Failed to clear the game list cache: {}", e)),
+    }
+}
+
+/// Discord does not expose its quest list or quest progress to other apps. The only
+/// local trace is whatever the desktop client writes to its log files, which differs
+/// between Discord builds. This scan is therefore best effort: it returns what it
+/// found, or a reason why there was nothing to find.
+#[derive(serde::Serialize)]
+struct DiscordQuestEntry {
+    name: String,
+    progress: Option<f64>,
+}
+
+#[derive(serde::Serialize)]
+struct DiscordQuestScan {
+    available: bool,
+    reason: String,
+    quests: Vec<DiscordQuestEntry>,
+}
+
+fn discord_log_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
+    #[cfg(target_os = "windows")]
+    if let Some(roaming) = env::var_os("APPDATA") {
+        let base = PathBuf::from(roaming);
+        dirs.push(base.join("discord").join("logs"));
+        dirs.push(base.join("Discord").join("logs"));
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(home) = env::var_os("HOME") {
+        dirs.push(
+            PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("discord")
+                .join("logs"),
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(config) = env::var_os("XDG_CONFIG_HOME") {
+            dirs.push(PathBuf::from(config).join("discord").join("logs"));
+        } else if let Some(home) = env::var_os("HOME") {
+            dirs.push(PathBuf::from(home).join(".config").join("discord").join("logs"));
+        }
+    }
+
+    dirs
+}
+
+fn json_string_field(line: &str, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        let needle = format!("\"{}\"", key);
+        if let Some(start) = line.find(&needle) {
+            let rest = &line[start + needle.len()..];
+            let rest = rest.trim_start();
+            let rest = rest.strip_prefix(':')?.trim_start();
+            let rest = rest.strip_prefix('"')?;
+            let end = rest.find('"')?;
+            let value = rest[..end].trim();
+            if !value.is_empty() && value.len() < 120 {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn json_number_field(line: &str, keys: &[&str]) -> Option<f64> {
+    for key in keys {
+        let needle = format!("\"{}\"", key);
+        if let Some(start) = line.find(&needle) {
+            let rest = &line[start + needle.len()..];
+            let rest = rest.trim_start().strip_prefix(':')?.trim_start();
+            let digits: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if let Ok(value) = digits.parse::<f64>() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn detect_discord_quests() -> DiscordQuestScan {
+    let mut log_dirs_found = false;
+    let mut checked_files = 0usize;
+    let mut quests: Vec<DiscordQuestEntry> = Vec::new();
+
+    for dir in discord_log_dirs() {
+        if !dir.is_dir() {
+            continue;
+        }
+        log_dirs_found = true;
+
+        let mut files: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_file() {
+                    return None;
+                }
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, path))
+            })
+            .collect();
+
+        files.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (_, path) in files.into_iter().take(3) {
+            if fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > 20 * 1024 * 1024 {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(&path) else {
+                continue;
+            };
+            checked_files += 1;
+
+            for line in contents.lines() {
+                if !line.to_ascii_lowercase().contains("quest") {
+                    continue;
+                }
+                let Some(name) = json_string_field(
+                    line,
+                    &["questName", "quest_name", "title", "name"],
+                ) else {
+                    continue;
+                };
+                if quests.iter().any(|entry| entry.name == name) {
+                    continue;
+                }
+                quests.push(DiscordQuestEntry {
+                    name,
+                    progress: json_number_field(line, &["progress", "percent", "completion"]),
+                });
+                if quests.len() >= 10 {
+                    break;
+                }
+            }
+
+            if quests.len() >= 10 {
+                break;
+            }
+        }
+    }
+
+    let reason = if !quests.is_empty() {
+        format!("Found {} quest reference(s) in Discord's local logs.", quests.len())
+    } else if !log_dirs_found {
+        "Discord logs were not found on this machine, so quest data cannot be read.".to_string()
+    } else if checked_files == 0 {
+        "Discord's log folder exists but had no readable files.".to_string()
+    } else {
+        "Discord's local logs contain no quest entries; this Discord build does not log quest data, so the estimate above is used instead.".to_string()
+    };
+
+    DiscordQuestScan {
+        available: !quests.is_empty(),
+        reason,
+        quests,
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -518,7 +697,9 @@ pub fn run() {
             fetch_gamelist_gh_mirror,
             fetch_gamelist_from_discord,
             read_gamelist_cache,
-            write_gamelist_cache
+            write_gamelist_cache,
+            clear_gamelist_cache,
+            detect_discord_quests
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

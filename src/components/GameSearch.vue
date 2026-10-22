@@ -117,109 +117,105 @@ function executablesForPlatform(game: Game) {
 <template>
     <div ref="rootRef" class="relative">
         <div class="relative">
+            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none"
+                style="color: var(--text-faint)" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round">
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+            </svg>
             <input ref="inputRef" v-model="query" type="text" role="combobox" aria-controls="game-search-results"
                 :aria-expanded="open" aria-autocomplete="list" placeholder="Search games by name, alias or app ID..."
-                class="w-full pl-4 pr-40 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 dark:text-white"
-                @focus="open = true" @keydown="onKeydown" />
+                class="input pl-9 pr-40 py-2.5" @focus="open = true" @keydown="onKeydown" />
 
             <div class="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                <button v-if="query" class="text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
-                    title="Clear search" @mousedown.prevent @click="clearSearch">
+                <button v-if="query" class="btn btn-ghost text-xs" title="Clear search" @mousedown.prevent
+                    @click="clearSearch">
                     Clear
                 </button>
-                <button
-                    class="px-3 py-1 text-xs bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-700 dark:text-white rounded-md disabled:opacity-60 disabled:cursor-not-allowed"
-                    :disabled="isRefreshing" @click="emit('refresh')">
-                    <span class="whitespace-nowrap">
-                        {{ isRefreshing ? 'Refreshing...' : 'Refresh list' }}
-                    </span>
+                <button class="btn btn-quiet text-xs" :disabled="isRefreshing" @click="emit('refresh')">
+                    {{ isRefreshing ? 'Refreshing...' : 'Refresh list' }}
                 </button>
             </div>
         </div>
 
-        <div v-if="open"
-            class="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-96 overflow-y-auto">
-            <!-- filters + list info -->
-            <div class="sticky top-0 z-10 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-3 py-2">
-                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
-                    <label class="flex items-center gap-1 cursor-pointer">
-                        <input v-model="onlyLaunchable" type="checkbox" class="accent-indigo-600" />
+        <div v-if="open" class="absolute z-50 mt-2 w-full panel overflow-hidden"
+            style="box-shadow: 0 24px 45px -20px rgba(0, 0, 0, 0.65)">
+            <div class="sticky top-0 z-10 px-3 py-2"
+                style="background: var(--bg-panel); border-bottom: 1px solid var(--border)">
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs faint">
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                        <input v-model="onlyLaunchable" type="checkbox" class="accent-[var(--accent)]" />
                         Launchable only
                     </label>
-                    <label class="flex items-center gap-1 cursor-pointer">
-                        <input v-model="platformOnly" type="checkbox" class="accent-indigo-600" />
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                        <input v-model="platformOnly" type="checkbox" class="accent-[var(--accent)]" />
                         {{ platform }} executables only
                     </label>
                     <span class="ml-auto">
                         {{ listSize.toLocaleString() }} games
-                        <template v-if="info"> &middot; {{ sourceLabel(info.source) }}</template>
+                        <template v-if="info"> · {{ sourceLabel(info.source) }}</template>
                     </span>
                 </div>
             </div>
 
-            <!-- loading -->
-            <div v-if="!isReady" class="p-3 text-sm text-gray-500 dark:text-gray-400">
+            <div v-if="!isReady" class="p-4 text-sm muted">
                 Loading the game list...
             </div>
 
-            <!-- empty query help -->
-            <div v-else-if="!trimmedQuery" class="p-3 text-sm text-gray-500 dark:text-gray-400 space-y-1">
+            <div v-else-if="!trimmedQuery" class="p-4 text-sm muted space-y-1">
                 <p>
                     Search by game name, alias, app ID or executable name.
                     {{ launchableCount.toLocaleString() }} of {{ listSize.toLocaleString() }} games can be launched.
                 </p>
-                <p class="text-xs">
-                    Pick a game and click "Add game to list" to queue it, then use Play on the right side.
+                <p class="text-xs faint">
+                    Pick a game to queue it, then press Play on the right side.
                 </p>
             </div>
 
-            <!-- searching -->
-            <div v-else-if="isSearchPending" class="p-3 text-sm text-gray-500 dark:text-gray-400">
+            <div v-else-if="isSearchPending" class="p-4 text-sm muted">
                 Searching...
             </div>
 
-            <!-- no result -->
-            <div v-else-if="showNoResult" class="p-3 text-sm text-gray-500 dark:text-gray-400 space-y-1">
+            <div v-else-if="showNoResult" class="p-4 text-sm muted space-y-1">
                 <p>No game found for "{{ trimmedQuery }}".</p>
-                <p class="text-xs">
+                <p class="text-xs faint">
                     Try a shorter name, an alias, an app ID, or untick "Launchable only".
                 </p>
             </div>
 
-            <!-- results -->
             <div v-else role="listbox" id="game-search-results">
                 <div v-for="(game, index) in results" :key="game.id" role="option" :aria-selected="index === activeIndex"
-                    class="p-3 border-b border-gray-200 dark:border-gray-700 last:border-b-0 cursor-pointer"
-                    :class="index === activeIndex ? 'bg-gray-100 dark:bg-gray-700' : 'hover:bg-gray-50 dark:hover:bg-gray-700/60'"
-                    @mousedown.prevent @mouseenter="setActive(index)" @click="addGame(game)">
+                    class="p-3 cursor-pointer"
+                    :style="{
+                        background: index === activeIndex ? 'var(--bg-hover)' : 'transparent',
+                        borderBottom: '1px solid var(--border)',
+                    }" @mousedown.prevent @mouseenter="setActive(index)" @click="addGame(game)">
                     <div class="flex justify-between items-start gap-3">
                         <div class="min-w-0">
-                            <div class="font-medium text-gray-800 dark:text-white flex flex-wrap items-center gap-1">
+                            <div class="font-medium flex flex-wrap items-center gap-1.5" style="color: var(--text)">
                                 <span>{{ game.name }}</span>
-                                <span v-if="!game.launchable"
-                                    class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-                                    no executable
-                                </span>
+                                <span v-if="!game.launchable" class="chip chip-warning">no executable</span>
                             </div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400">App ID: {{ game.id }}</div>
-                            <div v-if="game.executables.length" class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                <span class="font-mono">{{ executablesForPlatform(game).slice(0, 2).map(exe => exe.name).join(', ') }}</span>
+                            <div class="text-xs faint mt-0.5">App ID: {{ game.id }}</div>
+                            <div v-if="game.executables.length" class="text-xs faint mt-1 font-mono truncate">
+                                {{ executablesForPlatform(game).slice(0, 2).map(exe => exe.name).join(', ') }}
                                 <span v-if="executablesForPlatform(game).length > 2">
                                     +{{ executablesForPlatform(game).length - 2 }} more
                                 </span>
                             </div>
                         </div>
-                        <span class="shrink-0 text-xs text-indigo-600 dark:text-indigo-400">Add</span>
+                        <span class="shrink-0 text-xs font-semibold" style="color: var(--accent)">Add</span>
                     </div>
                 </div>
 
-                <!-- footer -->
-                <div class="sticky bottom-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 px-3 py-2 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                <div class="sticky bottom-0 px-3 py-2 flex items-center justify-between text-xs faint"
+                    style="background: var(--bg-panel); border-top: 1px solid var(--border)">
                     <span>
                         Showing {{ results.length }} of {{ totalMatches.toLocaleString() }} matches
                         <span v-if="poolSize !== listSize"> ({{ poolSize.toLocaleString() }} in current filters)</span>
                     </span>
-                    <button v-if="hasMore" class="text-indigo-600 dark:text-indigo-400 hover:underline" @mousedown.prevent @click="loadMore">
+                    <button v-if="hasMore" class="font-semibold" style="color: var(--accent)"
+                        @mousedown.prevent @click="loadMore">
                         Load more
                     </button>
                 </div>

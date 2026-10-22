@@ -105,6 +105,11 @@ EBWebView
 - Simulate playing verified Discord games without intalling a full game!
 - Complete Discord Quests requiring 15-minute gameplay (not yet tested for Stream the game Quests)
 - Only Discord Verified games are supported. The application fetches a list of games that Discord can automatically detect.
+- Sidebar app with three pages: **Home** (search + play), **Quests** (estimated progress per game) and **Settings**.
+- Games keep running until you press Stop, so Discord keeps showing them after the estimated quest time is reached.
+- Quests page shows a progress bar against the estimated quest length, a completed badge, and a history of finished sessions.
+- Settings includes a live status dashboard (running sessions, game list source, cache size, runner), appearance options (dark/light/system theme and accent color), play behaviour toggles, cache/data controls and an activity log.
+- Discord does not expose its quest list, so the app estimates progress from play time and only shows detected Discord quest data when the local Discord install exposes it.
 
 ## ⚙️ How It Works
 

@@ -1,23 +1,26 @@
 <script setup lang="ts">
-import { computed, provide, ref, useTemplateRef, watch } from 'vue';
-import { useIntervalFn, tryOnMounted } from '@vueuse/core';
+import { computed, provide, ref, useTemplateRef } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { path } from '@tauri-apps/api';
 import { emit } from '@tauri-apps/api/event';
-import { randomString } from '@/utils/random-string';
 import { GameActionsProvider, GameExecutable, type Game } from '@/types/types';
 import IconVerified from '@/components/IconVerified.vue';
 import { isEmpty } from 'lodash-es';
 import GameExecutables from '@/components/GameExecutables.vue';
 import GameSearch from '@/components/GameSearch.vue';
 import { GameActionsKey, getCurrentOS } from '@/constants/constants';
-import { normalizeGame, useFetchGameList } from '@/composables/fetch-gamelist';
+import { useFetchGameList } from '@/composables/fetch-gamelist';
 import { useGlobalState } from '@/composables/app-state';
+import { useSelectedGames } from '@/composables/use-selected-games';
+import { useSessions, formatClock } from '@/composables/use-sessions';
+import { useSettings } from '@/composables/use-settings';
+import { useToasts } from '@/composables/use-toasts';
 
 type DialogKey =
     'none' |
     'rpc_message_1' |
-    'no_game_selected';
+    'no_game_selected' |
+    'confirm_stop';
 
 const {
     gameDB,
@@ -37,8 +40,8 @@ const dialogKey = ref<DialogKey>('none');
 const isConnectedToRPC = ref(false);
 const isConnecting = ref(false);
 
-// Selected games list
-const gameList = ref<Game[]>([]);
+// Selected games (shared with Settings, which can clear the list)
+const { games: gameList, addGame, removeGame } = useSelectedGames();
 const selectedGameId = ref<string | null | undefined>(null);
 
 const selectedGame = computed(() => {
@@ -46,92 +49,37 @@ const selectedGame = computed(() => {
     return gameList.value.find(g => g.uid === selectedGameId.value) ?? null;
 });
 
-/* ------------------------------------------------------------------ *
- * Persistence of the selected games
- * ------------------------------------------------------------------ */
-const SELECTED_GAMES_KEY = 'dqc:selected-games:v1';
-
-function toStorableGame(game: Game): Game {
-    return {
-        uid: game.uid,
-        id: game.id,
-        name: game.name,
-        aliases: game.aliases,
-        themes: game.themes,
-        launchable: game.launchable,
-        is_custom: game.is_custom,
-        // Never persist runtime state: on a fresh launch nothing is running/installed yet.
-        executables: game.executables.map(exe => ({
-            is_launcher: exe.is_launcher,
-            name: exe.name,
-            os: exe.os,
-            ...(exe.arguments ? { arguments: exe.arguments } : {}),
-        })),
-    };
-}
-
-function persistSelectedGames() {
-    try {
-        localStorage.setItem(SELECTED_GAMES_KEY, JSON.stringify(gameList.value.map(toStorableGame)));
-    } catch {
-        addLog('error', 'Could not save the selected games list.');
-    }
-}
-
-function restoreSelectedGames() {
-    try {
-        const raw = localStorage.getItem(SELECTED_GAMES_KEY);
-        if (!raw) return;
-        const parsed: unknown = JSON.parse(raw);
-        if (!Array.isArray(parsed)) return;
-
-        const restored: Game[] = [];
-        for (const entry of parsed as any[]) {
-            const game = normalizeGame(entry);
-            if (!game) continue;
-            restored.push({
-                ...game,
-                uid: typeof entry?.uid === 'string' ? entry.uid : randomString(),
-                is_custom: entry?.is_custom === true,
-            });
-        }
-        gameList.value = restored;
-        if (restored.length) {
-            addLog('info', `Restored ${restored.length} game(s) from your previous session.`);
-        }
-    } catch {
-        addLog('error', 'Saved game list could not be restored.');
-    }
-}
-
-function addGameToList(game: Game) {
-    if (gameList.value.some(g => g.id === game.id)) {
-        addLog('warning', `${game.name} is already in your list.`);
-        return;
-    }
-
-    // Deep copy the executables: the search list must never be mutated by play/stop state.
-    gameList.value.push({
-        ...game,
-        uid: randomString(),
-        is_running: false,
-        is_installed: false,
-        executables: game.executables.map(exe => ({ ...exe, is_running: false, is_installed: false })),
-    });
-    persistSelectedGames();
-}
+const {
+    sessions,
+    start: startSession,
+    end: endSession,
+    requestStop: requestSessionStop,
+    setStopHandler,
+    elapsed: sessionElapsed,
+    progress: sessionProgress,
+    remaining: sessionRemaining,
+    isComplete: sessionIsComplete,
+} = useSessions();
+const { settings } = useSettings();
+const { push: pushToast } = useToasts();
 
 const forceRerenderKey = ref(0);
 
+function addGameToList(game: Game) {
+    const added = addGame(game);
+    if (!added) {
+        addLog('warning', `${game.name} is already in your list.`);
+        return;
+    }
+    pushToast(`Added ${game.name}`, 'success', 2500);
+}
+
 function removeGameFromList(game: Game) {
-    const gameId = game.uid;
-    gameList.value = gameList.value.filter(item => item.uid !== gameId);
-    sessions.value = sessions.value.filter(session => session.gameUid !== gameId);
-    if (selectedGame.value?.uid === gameId) {
+    removeGame(game.uid);
+    if (selectedGameId.value === game.uid) {
         selectedGameId.value = null;
         forceRerenderKey.value++;
     }
-    persistSelectedGames();
 }
 
 function selectGame(game: Game) {
@@ -157,65 +105,6 @@ function isGameInstalled(game: Game | null) {
         return false;
     }
     return game.is_installed ?? false;
-}
-
-/* ------------------------------------------------------------------ *
- * Running sessions
- * ------------------------------------------------------------------ */
-interface GameSession {
-    key: string;
-    gameUid: string;
-    gameName: string;
-    executable: GameExecutable;
-    startedAt: number;
-}
-
-const sessions = ref<GameSession[]>([]);
-const now = ref(Date.now());
-
-useIntervalFn(() => {
-    now.value = Date.now();
-}, 1000);
-
-function sessionElapsed(session: GameSession): number {
-    return Math.max(0, Math.floor((now.value - session.startedAt) / 1000));
-}
-
-function formatDuration(totalSeconds: number): string {
-    const safe = Math.max(0, totalSeconds);
-    const minutes = Math.floor(safe / 60);
-    const seconds = safe % 60;
-    return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
-function startSession(game: Game, executable: GameExecutable) {
-    const key = `${game.id}:${executable.name}`;
-    sessions.value = [
-        ...sessions.value.filter(session => session.key !== key),
-        {
-            key,
-            gameUid: game.uid ?? game.id,
-            gameName: game.name,
-            executable,
-            startedAt: Date.now(),
-        },
-    ];
-}
-
-function endSession(game: Game, executable: GameExecutable) {
-    const key = `${game.id}:${executable.name}`;
-    sessions.value = sessions.value.filter(session => session.key !== key);
-}
-
-function stopSession(session: GameSession) {
-    // Drop the session first so a slow stop can never be requested twice.
-    sessions.value = sessions.value.filter(item => item.key !== session.key);
-
-    const game = gameList.value.find(item => item.uid === session.gameUid);
-    if (!game) {
-        return;
-    }
-    void stopPlaying({ game, executable: session.executable });
 }
 
 /* ------------------------------------------------------------------ *
@@ -338,8 +227,18 @@ async function playGame({ game, executable }: { game: Game, executable: GameExec
     }
 }
 
-async function stopPlaying({ game, executable }: { game: Game, executable: GameExecutable }) {
+const pendingStop = ref<{ game: Game, executable: GameExecutable } | null>(null);
+
+async function stopPlaying(
+    { game, executable }: { game: Game, executable: GameExecutable },
+    options: { confirmed?: boolean } = {},
+) {
     if (!game) {
+        return;
+    }
+    if (settings.confirmStop && !options.confirmed) {
+        pendingStop.value = { game, executable };
+        showDialog('confirm_stop');
         return;
     }
     const gameUid = game.uid;
@@ -430,8 +329,26 @@ function hideDialog() {
     isDialogOpen.value = false;
 }
 
-tryOnMounted(() => {
-    restoreSelectedGames();
+function confirmPendingStop() {
+    const pending = pendingStop.value;
+    pendingStop.value = null;
+    hideDialog();
+    if (pending) {
+        void stopPlaying(pending, { confirmed: true });
+    }
+}
+
+function cancelPendingStop() {
+    pendingStop.value = null;
+    hideDialog();
+}
+
+// Quests/Settings can request a stop without knowing how the process gets killed.
+setStopHandler(session => {
+    const game = gameList.value.find(item => item.uid === session.gameUid);
+    if (game) {
+        void stopPlaying({ game, executable: session.executable });
+    }
 });
 
 provide<GameActionsProvider>(GameActionsKey, {
@@ -443,253 +360,215 @@ provide<GameActionsProvider>(GameActionsKey, {
 </script>
 
 <template>
-    <div class="container mx-auto px-4 py-8">
-        <!-- Center dialog -->
-        <dialog id="dialog" class="dialogStyle inset-0 bg-gray-800 bg-opacity-50
-        border border-gray-300 dark:border-gray-600 rounded-lg
-        transition-opacity duration-300 ease-in-out z-50
-        "
-        style="left: 50%; top: 50%; transform: translate(-50%, -50%)"
-        ref="dialogRef">
-            <div class="flex flex-col items-center justify-center p-6">
-                <div class="mb-4 text-gray-500 dark:text-gray-400">
-                    <div v-if="dialogKey === 'rpc_message_1'">
+    <div class="p-6 lg:p-8 max-w-[1150px] mx-auto space-y-6">
+        <!-- RPC / info dialogs -->
+        <dialog ref="dialogRef" class="dialog-surface p-0 z-50" style="margin: auto">
+            <div class="p-6 max-w-md">
+                <div class="text-sm space-y-2 muted">
+                    <template v-if="dialogKey === 'rpc_message_1'">
+                        <h2 class="text-base font-semibold" style="color: var(--text)">Test RPC (experimental)</h2>
                         <p>
-                            This is only a feature in development.
+                            This tricks Discord into thinking you are playing a game by sending an RPC with the real
+                            game ID, instead of letting Discord detect a running process.
                         </p>
-                        <p class="my-2">
-                            It works but due to the nature that it tricks Discord into thinking you are playing a game
-                            by sending an RPC using actual game ID rather than letting Discord detect you have a game/application running.
-                        </p>
-                        <p>
-                            This may flag your account as suspicious for self-botting.
-                        </p>
-                    </div>
-
-                    <div v-if="dialogKey === 'no_game_selected'">
-                        <p>
-                            No game selected. Please select a game from the list on the left.
-                        </p>
-                    </div>
+                        <p>This may flag your account as suspicious for self-botting.</p>
+                    </template>
+                    <template v-else-if="dialogKey === 'no_game_selected'">
+                        <p>No game selected. Pick one from your list on the left first.</p>
+                    </template>
+                    <template v-else-if="dialogKey === 'confirm_stop'">
+                        <h2 class="text-base font-semibold" style="color: var(--text)">Stop the game?</h2>
+                        <p>This kills the runner process, so Discord stops showing the game.</p>
+                    </template>
                 </div>
-                <div class="gap-2 flex">
-                    <button
-                        class="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300
-                        border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-1"
-                        @click="hideDialog()">
-                        <span v-if="dialogKey == 'rpc_message_1'">
-                            Cancel
-                        </span>
-                        <span v-else>OK</span>
-                    </button>
-
-                    <button v-if="dialogKey === 'rpc_message_1'"
-                        class="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300
-                        border border-gray-300 dark:border-gray-600 rounded-lg px-4 py-1"
-                        @click="continueRPCRisk(selectedGame)">
-                        Accept risk and continue
-                    </button>
+                <div class="flex justify-end gap-2 mt-5">
+                    <template v-if="dialogKey === 'confirm_stop'">
+                        <button class="btn btn-quiet" @click="cancelPendingStop">Cancel</button>
+                        <button class="btn btn-accent" @click="confirmPendingStop">Stop game</button>
+                    </template>
+                    <template v-else>
+                        <button class="btn btn-quiet" @click="hideDialog()">
+                            {{ dialogKey === 'rpc_message_1' ? 'Cancel' : 'OK' }}
+                        </button>
+                        <button v-if="dialogKey === 'rpc_message_1'" class="btn btn-accent"
+                            @click="continueRPCRisk(selectedGame)">
+                            Accept risk and continue
+                        </button>
+                    </template>
                 </div>
             </div>
         </dialog>
 
         <!-- Custom game dialog -->
-        <dialog ref="customGameDialogRef" class="dialogStyle inset-0 bg-gray-800 bg-opacity-50
-        border border-gray-300 dark:border-gray-600 rounded-lg z-50"
-            style="left: 50%; top: 50%; transform: translate(-50%, -50%)">
+        <dialog ref="customGameDialogRef" class="dialog-surface p-0 z-50" style="margin: auto">
             <form class="flex flex-col gap-3 p-6 w-[min(90vw,26rem)]" @submit.prevent="submitCustomGame">
-                <h2 class="text-lg font-bold text-gray-900 dark:text-white">Add custom game</h2>
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                    Use this for Discord apps that are not in the detectable list. The app ID is the number
-                    from the game's Discord application, and the executable is the file name Discord watches for.
+                <h2 class="text-lg font-bold" style="color: var(--text)">Add custom game</h2>
+                <p class="text-xs faint">
+                    For Discord apps that are not in the detectable list. The app ID is the number from the game's
+                    Discord application, and the executable is the file name Discord watches for.
                 </p>
 
-                <label class="text-sm text-gray-700 dark:text-gray-300">
+                <label class="text-sm muted">
                     App ID
                     <input v-model="customGame.appId" inputmode="numeric" placeholder="356875221078245376"
-                        class="mt-1 w-full px-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+                        class="input mt-1" />
                 </label>
-                <label class="text-sm text-gray-700 dark:text-gray-300">
+                <label class="text-sm muted">
                     Game name
-                    <input v-model="customGame.name" placeholder="Overwatch"
-                        class="mt-1 w-full px-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+                    <input v-model="customGame.name" placeholder="Overwatch" class="input mt-1" />
                 </label>
-                <label class="text-sm text-gray-700 dark:text-gray-300">
+                <label class="text-sm muted">
                     Executable name
-                    <input v-model="customGame.executable" placeholder="overwatch.exe"
-                        class="mt-1 w-full px-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white" />
+                    <input v-model="customGame.executable" placeholder="overwatch.exe" class="input mt-1" />
                 </label>
 
-                <p v-if="customGameError" class="text-xs text-red-400">{{ customGameError }}</p>
+                <p v-if="customGameError" class="text-xs" style="color: var(--danger)">{{ customGameError }}</p>
 
                 <div class="flex justify-end gap-2 mt-2">
-                    <button type="button"
-                        class="px-4 py-1 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400"
-                        @click="closeCustomGameDialog">
-                        Cancel
-                    </button>
-                    <button type="submit" class="px-4 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white">
-                        Add game
-                    </button>
+                    <button type="button" class="btn btn-quiet" @click="closeCustomGameDialog">Cancel</button>
+                    <button type="submit" class="btn btn-accent">Add game</button>
                 </div>
             </form>
         </dialog>
 
-        <h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-6 text-center">
-            Handler
-        </h1>
-
-        <!-- Game list fetch status -->
-        <div class="mb-3 flex items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400">
-            <div class="flex items-center gap-2 min-w-0">
-                <span class="w-2 h-2 rounded-full shrink-0"
-                    :class="isRefreshing ? 'bg-amber-400 animate-pulse' : lastError ? 'bg-amber-500' : 'bg-green-500'"></span>
-                <span class="truncate">
+        <header class="flex items-start justify-between gap-4 flex-wrap">
+            <div>
+                <h1 class="text-2xl font-bold" style="color: var(--text)">Home</h1>
+                <p class="text-sm mt-1 muted">Add a game, press Play, and Discord will show it as playing.</p>
+            </div>
+            <div class="flex flex-col items-end gap-1 text-xs">
+                <span class="chip">
+                    <span class="dot" :class="isRefreshing ? 'dot-busy' : lastError ? 'dot-off' : 'dot-live'"></span>
                     <template v-if="!isReady">Loading game list...</template>
-                    <template v-else>
-                        {{ info.total.toLocaleString() }} games
-                        <template v-if="info.launchable"> &middot; {{ info.launchable.toLocaleString() }} launchable</template>
-                        <template v-if="info.source"> &middot; from {{ info.source }}</template>
-                    </template>
+                    <template v-else>{{ info.total.toLocaleString() }} games · {{ info.launchable.toLocaleString() }}
+                        launchable</template>
+                </span>
+                <span class="faint">
+                    source: {{ info.source || 'unknown' }}
+                    <button v-if="lastError" class="underline ml-1" @click="fetchGameList">Retry</button>
                 </span>
             </div>
-            <button v-if="lastError" class="text-indigo-500 hover:underline shrink-0" @click="fetchGameList">
-                Retry
-            </button>
-        </div>
-        <p v-if="lastError" class="mb-3 text-xs text-amber-500 break-words">
+        </header>
+
+        <p v-if="lastError" class="panel-soft p-3 text-xs" style="color: var(--warning)">
             Could not refresh the game list: {{ lastError }}
         </p>
 
-        <!-- Search Bar -->
-        <div class="mb-8">
+        <!-- Search -->
+        <section class="panel p-4">
             <GameSearch :games="gameDB" :is-ready="isReady" :is-refreshing="isRefreshing" :info="info"
                 @add="addGameToList" @refresh="fetchGameList" />
-            <div class="mt-2 flex items-start justify-between gap-3">
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                    Discord quests usually need the game to run for about 15 minutes.
-                </p>
-                <button class="text-xs text-indigo-500 hover:underline shrink-0" @click="openCustomGameDialog">
-                    + Add custom game
-                </button>
+            <div class="mt-3 flex items-start justify-between gap-3 text-xs">
+                <p class="faint">Discord quests usually need about {{ settings.questMinutes }} minutes of play time.</p>
+                <button class="btn btn-ghost text-xs" @click="openCustomGameDialog">+ Add custom game</button>
             </div>
-        </div>
+        </section>
 
-        <!-- Two-Column Layout with right fixed column -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
-            <!-- Left Column: Selected Games (scrollable) -->
-            <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4 sticky top-0 bg-white dark:bg-gray-800 py-2 z-10">
-                    Games</h2>
-                <div v-if="gameList.length === 0" class="text-gray-500 dark:text-gray-400 text-center py-8">
-                    No games selected. Search and add games from the search bar.
+        <div class="grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-5 items-start">
+            <!-- Selected games -->
+            <section class="panel p-5">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                    <h2 class="font-semibold" style="color: var(--text)">Your games</h2>
+                    <span class="chip">{{ gameList.length }}</span>
                 </div>
-                <div v-else class="space-y-4">
-                    <div v-for="game in gameList" :key="game.id"
-                        class="p-3 border border-gray-200 dark:border-gray-700 rounded-lg
-                        hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors
-                        duration-200 ease-in-out"
-                        :class="[
-                            {
-                                'ring-1 ring-violet-500/40 shadow-[0px_0px_8px_2px_#8e51ff50] bg-gray-100 dark:bg-gray-700/40': selectedGame?.uid === game.uid,
-                            }
-                        ]" @click="selectGame(game)">
-                        <div class="flex justify-between items-center">
-                            <div class="flex items-center gap-1 min-w-0">
-                                <div class="font-medium text-gray-800 dark:text-white truncate">{{ game.name }}</div>
-                                <div class="relative inline-flex items-center shrink-0">
-                                    <div class="w-2 h-2 bg-white absolute rounded-full"
-                                        style="left: 50%; top: 50%; transform: translate(-50%, -50%)"></div>
-                                    <div class="relative inline-block">
-                                        <IconVerified class="w-5 h-5 text-indigo-500 dark:text-indigo-400"></IconVerified>
-                                    </div>
-                                </div>
-                                <span v-if="game.is_custom"
-                                    class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300 shrink-0">
-                                    custom
-                                </span>
+
+                <div v-if="!gameList.length" class="py-10 text-center">
+                    <p class="text-sm muted">No games yet. Search above to add one.</p>
+                </div>
+
+                <div v-else class="space-y-2.5">
+                    <div v-for="game in gameList" :key="game.uid" class="game-card p-3"
+                        :class="{ 'game-card-active': selectedGame?.uid === game.uid }" data-game-card
+                        @click="selectGame(game)">
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="flex items-center gap-1.5 min-w-0">
+                                <span class="font-medium truncate" style="color: var(--text)">{{ game.name }}</span>
+                                <IconVerified class="w-4 h-4 shrink-0" style="color: var(--accent)" />
+                                <span v-if="game.is_custom" class="chip chip-accent">custom</span>
                             </div>
-                            <button @click.stop="removeGameFromList(game)" class="text-red-300 hover:text-red-400 shrink-0"
-                                v-if="!game.is_running">
-                                Remove
-                            </button>
+                            <button v-if="!game.is_running" class="btn btn-ghost text-xs shrink-0"
+                                @click.stop="removeGameFromList(game)">Remove</button>
                         </div>
-                        <div class="flex space-x-2 mt-2">
-                            <div class="text-sm text-green-500 dark:text-green-400" v-if="game.is_running">
-                                Running
-                            </div>
+                        <div class="flex items-center gap-2 mt-1.5 text-xs faint">
+                            <span class="dot" :class="game.is_running ? 'dot-live' : ''"></span>
+                            <span>{{ game.is_running ? 'Running' : 'Idle' }}</span>
+                            <span>·</span>
+                            <span class="truncate">ID {{ game.id }}</span>
                         </div>
                     </div>
                 </div>
-            </div>
+            </section>
 
-            <!-- Right Column: Game Actions -->
-            <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow md:sticky md:top-4 self-start" :key="forceRerenderKey">
-                <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-4">Game Actions</h2>
-                <div class="space-y-4">
-                    <div class="text-gray-500 dark:text-gray-400 mb-2 text-sm" v-if="!selectedGame">
-                        Select a game from the left to perform actions.
+            <!-- Actions + now playing -->
+            <div class="space-y-5" :key="forceRerenderKey">
+                <section class="panel p-5">
+                    <h2 class="font-semibold mb-3" style="color: var(--text)">Game actions</h2>
+
+                    <p v-if="!selectedGame" class="text-sm muted">Select a game on the left.</p>
+
+                    <template v-else>
+                        <div class="space-y-1 text-sm">
+                            <p style="color: var(--text)">{{ selectedGame.name }}</p>
+                            <p class="text-xs faint">ID {{ selectedGame.id }}</p>
+                            <p v-if="selectedGame.aliases?.length" class="text-xs faint">
+                                Alias: {{ selectedGame.aliases.slice(0, 3).join(', ') }}
+                            </p>
+                        </div>
+
+                        <button class="btn btn-quiet w-full mt-4" @click="handleTestRPC(selectedGame)">
+                            {{ isConnecting || isConnectedToRPC ? 'Disconnect from Discord Gateway' : 'Test RPC (experimental)' }}
+                        </button>
+
+                        <div class="divider my-4"></div>
+
+                        <GameExecutables :game="selectedGame" @play="playGame" @stop="stopPlaying"
+                            @install_and_play="installAndPlay" />
+                    </template>
+                </section>
+
+                <section class="panel p-5">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <h2 class="font-semibold" style="color: var(--text)">Now playing</h2>
+                        <span class="chip" :class="sessions.length ? 'chip-success' : ''">
+                            <span class="dot" :class="sessions.length ? 'dot-live' : ''"></span>
+                            {{ sessions.length ? 'live' : 'idle' }}
+                        </span>
                     </div>
+                    <p class="text-xs faint mb-3">Check Discord to confirm it shows you playing.</p>
 
-                    <div v-if="selectedGame" class="text-gray-500 dark:text-gray-400 mb-4 text-sm">
-                        <strong>Name:</strong> {{ selectedGame.name }}<br>
-                        <strong>ID:</strong> {{ selectedGame.id }}<br>
-                        <strong v-if="selectedGame.aliases && selectedGame.aliases.length > 0">Aliases:</strong>
-                        <ul v-if="selectedGame.aliases && selectedGame.aliases.length > 0" class="list-disc list-inside">
-                            <li v-for="alias in selectedGame.aliases" :key="alias" class="text-gray-500 dark:text-gray-400">
-                                <span class="font-mono">{{ alias }}</span>
-                            </li>
-                        </ul>
-                    </div>
-                    <button @click="handleTestRPC(selectedGame)"
-                        class="w-full py-2 rounded-lg bg-gray-600 hover:bg-gray-700 text-white">
-                        {{ isConnecting || isConnectedToRPC ? 'Disconnect to Discord Gateway' : 'Test RPC' }}
-                    </button>
+                    <p v-if="!sessions.length" class="text-sm muted">Not playing any game.</p>
 
-                    <div class="border-t border-gray-200 dark:border-gray-700 my-4"></div>
-
-                    <GameExecutables v-if="selectedGame" :game="selectedGame" @play="playGame" @stop="stopPlaying"
-                        @install_and_play="installAndPlay" />
-                </div>
-
-                <div class="border-t border-gray-200 dark:border-gray-700 my-5"></div>
-
-                <div class="mt-6 p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <h3 class="font-medium text-gray-800 dark:text-white mb-2">Status</h3>
-                    <div class="text-sm text-gray-500 dark:text-gray-400 mb-2">
-                        Check Discord to see if it displays that you are playing a game.
-                    </div>
-
-                    <div v-if="sessions.length === 0" class="text-gray-500 dark:text-gray-400">
-                        Not playing any game
-                    </div>
                     <div v-else class="space-y-3">
-                        <div v-for="session in sessions" :key="session.key" class="text-sm">
+                        <article v-for="session in sessions" :key="session.key" class="panel-soft p-3" data-session>
                             <div class="flex items-center justify-between gap-2">
-                                <span class="text-gray-700 dark:text-gray-300 truncate">{{ session.gameName }}</span>
-                                <button class="text-red-400 hover:text-red-300 shrink-0" @click="stopSession(session)">
-                                    Stop
-                                </button>
+                                <div class="min-w-0">
+                                    <p class="text-sm truncate" style="color: var(--text)">{{ session.gameName }}</p>
+                                    <p class="text-xs font-mono truncate faint">{{ session.executable.name }}</p>
+                                </div>
+                                <button class="btn btn-danger text-xs shrink-0"
+                                    @click="requestSessionStop(session)">Stop</button>
                             </div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
-                                {{ session.executable.name }}
+                            <div class="progress-track mt-2">
+                                <div class="progress-fill"
+                                    :class="{ 'progress-fill-done': sessionIsComplete(session) }"
+                                    :style="{ width: sessionProgress(session) + '%' }"></div>
                             </div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                {{ formatDuration(sessionElapsed(session)) }} elapsed &middot; running until you press Stop
-                            </div>
-                        </div>
+                            <p class="text-xs mt-1.5 faint">
+                                {{ formatClock(sessionElapsed(session)) }} elapsed ·
+                                <template v-if="sessionIsComplete(session)">estimated quest time reached</template>
+                                <template v-else>{{ formatClock(sessionRemaining(session)) }} to estimate</template>
+                            </p>
+                        </article>
                     </div>
-
-                </div>
+                </section>
             </div>
         </div>
     </div>
 </template>
 
 <style scoped>
-@reference "../theme/style.css";
-
-.dialogStyle::backdrop {
-    @apply bg-black/70 backdrop-blur-xs;
+.dialog-surface {
+    max-height: 85vh;
+    overflow: auto;
 }
 </style>

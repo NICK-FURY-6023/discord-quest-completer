@@ -1,6 +1,6 @@
 import { Game, GameExecutable } from '@/types/types';
 import { ref, shallowRef } from 'vue';
-import { tryOnMounted } from '@vueuse/core';
+import { createGlobalState, tryOnMounted } from '@vueuse/core';
 import { invoke } from '@tauri-apps/api/core';
 import { useGlobalState } from './app-state';
 
@@ -127,7 +127,7 @@ export function countLaunchable(games: Game[]): number {
     return games.reduce((total, game) => (game.executables.length > 0 ? total + 1 : total), 0);
 }
 
-export function useFetchGameList() {
+function useFetchGameListStore() {
     const { addLog } = useGlobalState();
 
     // shallowRef keeps Vue from deep-tracking ~25k game objects. Deep tracking used to
@@ -257,3 +257,6 @@ export function useFetchGameList() {
         fetchGameList,
     };
 }
+
+/** Shared so Home and Settings show the same list state. */
+export const useFetchGameList = createGlobalState(useFetchGameListStore);
