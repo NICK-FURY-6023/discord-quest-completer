@@ -24,11 +24,27 @@ https://github.com/user-attachments/assets/de904123-07df-41a9-8db1-ff05cc7ccc9b
 
 ## 📥 Installation
 
-### Windows
-
-You can download manually pre-built release binaries on the [Releases](https://github.com/markterence/discord-activity/releases) page.
+Pre-built binaries for Windows, Linux and macOS are published on the [Releases](https://github.com/NICK-FURY-6023/discord-quest-completer/releases) page. Every release is built by CI from the current `main` (see [Building a Release](#-building-a-release-ci)).
 
 Alternatively, you can follow the [development setup instructions](#-development-setup) to build the app from source.
+
+### Windows
+
+Download `discord-quest-completer-<version>-windows-x64.zip` (portable) or the `.msi`/`.exe` installer from the release assets, then extract and run `discord-quest-completer.exe`.
+
+### Linux
+
+Download `discord-quest-completer-<version>-linux-x64.tar.gz` (portable) or the `.deb`/`.AppImage` from the release assets. The app needs WebKitGTK 4.1 and GTK4, e.g. on Debian/Ubuntu:
+
+```bash
+sudo apt-get install libwebkit2gtk-4.1-0 libgtk-4-1
+```
+
+Then extract the tarball and run `./discord-quest-completer` from an X11 or Wayland session.
+
+### macOS (Apple Silicon)
+
+Download `discord-quest-completer-<version>-macos-arm64.zip`, unzip it and drag `Discord Quest Completer.app` into Applications. The build is not code-signed, so the first launch needs Right-click → Open. Intel Macs should build from source.
 
 > [!IMPORTANT]
 > Make sure you place or extract in a location where you have write or execute permissions.
@@ -136,20 +152,21 @@ The dummy game executale files used by this program are placed in a folder calle
 
 ## 🖥️ Supported Platforms
 
-- Windows 11 (not tested on Windows 10 but it should work)
+| Platform | Status | Notes |
+| --- | --- | --- |
+| Windows 10/11 (x64) | Supported | WebView2 required (preinstalled on Windows 11) |
+| Linux (x64) | Experimental | Needs WebKitGTK 4.1 + GTK4; built and published by CI |
+| macOS (Apple Silicon) | Experimental | Unsigned build, needs Right-click → Open on first launch |
 
-### 🐧 Linux and 🍎 MacOS Support?
+Each platform ships its own dummy game runner, because Discord detects the "game" by watching for that helper process:
 
-_TL;DR: Linux and macOS are not supported._
+| Platform | Runner crate | Resource in the bundle |
+| --- | --- | --- |
+| Windows | `src-win` (Win32, no runtime deps) | `data/src-win.exe` |
+| Linux | `src-linux` (GTK4) | `data/src-linux` |
+| macOS | `src-darwin` (winit) | `data/src-darwin` |
 
-Currently, only Windows is supported. I will try to add Linux support if I can. I don't have a macOS machine to test on, so macOS support is not going to happen.
-
-The reason for not having Linux and macOS support right now is that I want to make sure the dummy game runner has a minimal size — around 100KB or less for each platform.  
-For Windows, for example, I used Rust and the `windows` crate to access the Win32 API and create a dummy window. This compiles to a small 136KB executable.  
-I also tried a C# .NET app, which is fantastically small — only 7KB — but it may require the end-user to install the .NET 4.7 Runtime.
-
-For Linux, I don’t know where to start yet. I will try to explore more options to keep the runner binary small. It’s also a pain (Wine, Proton, etc. How does Discord detection even work on Linux? LMAO — same for macOS).  
-Additionally, if you are trying to run the windows build trough Wine in Linux, some of the dependencies such as Microsoft WebView2 somewhat problematic to install and get running.
+The Linux and macOS runners are newer and less battle-tested than the Windows one. If the runner does not stay alive, Discord will not show the game as playing.
 
 ---
 
@@ -179,11 +196,13 @@ Install dependencies for the Vue.js frontend using pnpm
 pnpm install
 ```
 
-Make sure to build and copy the dummy game binary from `src-win` and is add it on tauri application's "resources" folder.
+Build and copy the dummy game binary for your platform into the Tauri app's `resources` folder:
 
 ```bash
-pnpm build:runner:win && pnpm copy:runner:win
+pnpm sync:runner
 ```
+
+That picks `build:runner:<os>` + `copy:runner:<os>` for your OS, so `src-tauri/resources/` ends up with `src-win.exe`, `src-linux` or `src-darwin`.
 
 Then run the Tauri dev command to start the development server.
 
@@ -193,6 +212,46 @@ pnpm tauri dev
 
 - Also, get the list of detecatable games from the Discord API: `GET /api/applications/detectable` or `GET /api/:version/applications/detectable` and place the JSON file in `src/assets/gamelist.json`
 
+
+---
+
+## 📦 Building a Release (CI)
+
+`.github/workflows/build-release.yaml` is triggered manually (`workflow_dispatch`) and publishes a draft pre-release tagged with today's date.
+
+What each build job does:
+
+1. Downloads system dependencies (WebKitGTK + GTK4 on Linux).
+2. Refreshes `src/assets/gamelist.json` with `pnpm update:gamelist` (a ~3.7 MB trimmed snapshot, with the committed file as fallback).
+3. Builds the OS-specific dummy runner from `src-win` / `src-linux` / `src-darwin`.
+4. Runs `pnpm exec vue-tsc --noEmit` so TypeScript errors fail the build before the Rust link.
+5. Builds the Tauri app and uploads the bundle plus the portable binary as an artifact.
+
+The `release` job then packages the portable builds and attaches them together with the installers:
+
+| Platform | Portable asset | Installers |
+| --- | --- | --- |
+| Windows x64 | `discord-quest-completer-<version>-windows-x64.zip` | `.msi`, `.exe` |
+| Linux x64 | `discord-quest-completer-<version>-linux-x64.tar.gz` | `.deb`, `.AppImage` |
+| macOS arm64 | `discord-quest-completer-<version>-macos-arm64.zip` | `.dmg` |
+
+Start a release from **Actions → publish → Run workflow**, or from the CLI:
+
+```bash
+gh workflow run build-release.yaml
+```
+
+To reproduce a release locally:
+
+```bash
+pnpm install
+pnpm update:gamelist
+pnpm sync:runner
+pnpm exec vue-tsc --noEmit
+pnpm tauri build
+```
+
+Artifacts land in `src-tauri/target/release/bundle/` and the portable binary next to it in `src-tauri/target/release/`.
 
 ---
 

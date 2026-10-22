@@ -20,7 +20,13 @@ jobs:
         include:
           - platform: 'windows-latest'
             args: ''
-            x-target: 'win32-x64'
+            artifact: 'windows-x64'
+          - platform: 'ubuntu-22.04'
+            args: ''
+            artifact: 'linux-x64'
+          - platform: 'macos-latest'
+            args: ''
+            artifact: 'macos-arm64'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -30,7 +36,7 @@ jobs:
         name: Install pnpm
         with:
           run_install: false
-      
+
       - name: setup node
         uses: actions/setup-node@v4
         with:
@@ -48,13 +54,29 @@ jobs:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-registry-
-      
+
       - name: Cache Cargo index
         uses: actions/cache@v4
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-index-
+
+      # WebKitGTK for Tauri and GTK4 for the dummy game runner.
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libgtk-4-dev \
+            libssl-dev \
+            libxdo-dev \
+            patchelf \
+            build-essential \
+            curl wget file
 
       - name: Update bundled game list
         shell: bash
@@ -68,21 +90,36 @@ jobs:
             exit 1
           fi
 
-      # Build src-win
-      - name: Build src-win project x86_64 binary
-        if: matrix.platform == 'windows-latest'
+      # The app spawns this per-platform helper as the "game" Discord detects,
+      # so every release needs the runner for its own OS in src-tauri/resources.
+      - name: Build dummy game runner
         shell: bash
-        run: | 
-          cd src-win
-          cargo build --release --verbose
-          cd ..
-          cp ./src-win/target/release/src-win.exe ./src-tauri/resources/src-win.exe
+        run: |
+          set -euo pipefail
+          case "${RUNNER_OS}" in
+            Windows)
+              (cd src-win && cargo build --release)
+              cp src-win/target/release/src-win.exe src-tauri/resources/src-win.exe
+              ;;
+            Linux)
+              (cd src-linux && cargo build --release)
+              cp src-linux/target/release/src-linux src-tauri/resources/src-linux
+              ;;
+            macOS)
+              (cd src-darwin && cargo build --release)
+              cp src-darwin/target/release/src-darwin src-tauri/resources/src-darwin
+              ;;
+            *)
+              echo "Unsupported runner OS: ${RUNNER_OS}"
+              exit 1
+              ;;
+          esac
 
       - name: Rust cache (Tauri App)
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
-    
+
       - name: install frontend dependencies
         run: pnpm install
 
@@ -96,17 +133,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: ${{ matrix.args }}
-      
-      - name: Create artifact for release
-        id: create_artifact_for_release
+
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-win-release
+          name: tauri-${{ matrix.artifact }}
+          if-no-files-found: error
           path: |
-            src-tauri/target/release/discord-quest-completer.exe
             src-tauri/target/release/bundle/
+            src-tauri/target/release/discord-quest-completer
+            src-tauri/target/release/discord-quest-completer.exe
             src-tauri/target/release/data/
-            src-tauri/target/release/resources/
 
   release:
     needs: build-tauri
@@ -119,54 +156,74 @@ jobs:
           echo "version=$version" >> $GITHUB_ENV
         shell: bash
 
-      - name: Download artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: tauri-win-release
-          path: tauri-win-release
+          path: artifacts
 
-      - name: prepare files
-        env:
-          version: ${{ env.version }}
-          win_build_release_dir: discord-quest-completer-win32-x64-${{ env.version }}
+      - name: Package portable builds
+        shell: bash
         run: |
-          mkdir -p ./build/${{ env.win_build_release_dir }}
-          cp tauri-win-release/discord-quest-completer.exe ./build/${{ env.win_build_release_dir }}/
-          cp -r tauri-win-release/data/ ./build/${{ env.win_build_release_dir }}/
-          cp -r tauri-win-release/resources/ ./build/${{ env.win_build_release_dir }}/
-          zip -r ./build/${{ env.win_build_release_dir }}.zip ./build/${{ env.win_build_release_dir }}
-          echo "win_build_release_dir=${{ env.win_build_release_dir }}" >> $GITHUB_ENV
+          set -euo pipefail
+          version="${{ env.version }}"
+          mkdir -p build
 
-      - name: Create Build Artifacts
-        uses: actions/upload-artifact@v4
-        env: 
-          win_build_release_dir: ${{ env.win_build_release_dir }}
-        with:
-          name: ${{ env.win_build_release_dir }}.zip
-          path: | 
-            ./build/${{ env.win_build_release_dir }}.zip
-            tauri-win-release/bundle/**/*
+          win="discord-quest-completer-${version}-windows-x64"
+          mkdir -p "build/$win"
+          cp artifacts/tauri-windows-x64/discord-quest-completer.exe "build/$win/"
+          cp -r artifacts/tauri-windows-x64/data "build/$win/"
+          (cd build && zip -q -r "$win.zip" "$win")
+
+          linux="discord-quest-completer-${version}-linux-x64"
+          mkdir -p "build/$linux"
+          cp artifacts/tauri-linux-x64/discord-quest-completer "build/$linux/"
+          cp -r artifacts/tauri-linux-x64/data "build/$linux/"
+          (cd build && tar -czf "$linux.tar.gz" "$linux")
+
+          mac="discord-quest-completer-${version}-macos-arm64"
+          mkdir -p "build/$mac"
+          cp -r artifacts/tauri-macos-arm64/bundle/macos/*.app "build/$mac/"
+          (cd build && zip -q -r "$mac.zip" "$mac")
+
+          ls -lh build
 
       - name: Create and Upload Release
-        id: create_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.version }}
           name: Pre-Release ${{ env.version }}
           body: |
-            ![GitHub Downloads (specific asset, specific tag)](https://img.shields.io/github/downloads/markterence/discord-quest-completer/${{ env.version }}/${{ env.win_build_release_dir }}.zip)
+            Cross-platform pre-release built from `${{ github.sha }}`.
+
+            | Platform | Portable build | Installer |
+            | --- | --- | --- |
+            | Windows 10/11 (x64) | `discord-quest-completer-${{ env.version }}-windows-x64.zip` | `.msi` / `.exe` in the bundle artifacts |
+            | Linux (x64) | `discord-quest-completer-${{ env.version }}-linux-x64.tar.gz` | `.deb` / `.AppImage` in the bundle artifacts |
+            | macOS (Apple Silicon) | `discord-quest-completer-${{ env.version }}-macos-arm64.zip` | `.dmg` in the bundle artifacts |
+
+            **Windows:** extract the zip anywhere you can write to and run `discord-quest-completer.exe`. WebView2 is required (preinstalled on Windows 11).
+
+            **Linux:** extract the tarball and run `./discord-quest-completer`. WebKitGTK and GTK4 must be installed (`libwebkit2gtk-4.1-0`, `libgtk-4-1`), and the app expects an X11 or Wayland session.
+
+            **macOS:** unzip, then drag `Discord Quest Completer.app` into Applications. The build is unsigned, so the first launch needs Right-click → Open (or `xattr -dr com.apple.quarantine`). Apple Silicon only; build from source for Intel Macs.
+
+            Keep the app in a folder you can write to: it creates the dummy game runner and `games/` next to the executable.
 
             #### Disclaimer
-            This tool is intended for educational purposes and personal use. Please respect Discord's terms of service and game publishers' rights when using this application.  
-            
+            This tool is intended for educational purposes and personal use. Please respect Discord's terms of service and game publishers' rights when using this application.
+
             The creators and maintainers of this project are not liable for any damages, account suspensions, or other consequences that may arise from using this software. Use at your own risk. This project is not affiliated with, endorsed by, or connected to Discord in any way.
           append_body: true
           generate_release_notes: true
           files: |
-            ./build/${{ env.win_build_release_dir }}.zip
+            build/*.zip
+            build/*.tar.gz
+            artifacts/tauri-windows-x64/bundle/**/*.msi
+            artifacts/tauri-windows-x64/bundle/**/*.exe
+            artifacts/tauri-linux-x64/bundle/**/*.deb
+            artifacts/tauri-linux-x64/bundle/**/*.AppImage
+            artifacts/tauri-macos-arm64/bundle/**/*.dmg
           prerelease: true
           draft: true
         env:
-          version: ${{ env.version }}
-          win_build_release_dir: ${{ env.win_build_release_dir }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

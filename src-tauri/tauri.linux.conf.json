@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/src-linux": "data/src-linux"
+    }
+  }
+}
