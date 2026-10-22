@@ -3,6 +3,7 @@ export interface GameExecutable {
   is_launcher: boolean;
   name: string;
   os: string;
+  arguments?: string;
   filename?: string;
   path?: string;
   segments?: number;
@@ -18,6 +19,10 @@ export interface Game {
     themes?: string[];
     is_running?: boolean;
     is_installed?: boolean;
+    /** True when Discord registered at least one executable for this game. */
+    launchable?: boolean;
+    /** True for games added manually through the custom game form. */
+    is_custom?: boolean;
 }
 
 export interface GameActionsProvider {

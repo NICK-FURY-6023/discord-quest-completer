@@ -423,16 +423,72 @@ fn connect_to_discord_rpc_3(handle: AppHandle, activity_json: String, action: St
     });
 }
 
-#[tauri::command(rename_all = "snake_case")]
-async fn fetch_gamelist_gh_mirror() -> tauri::ipc::Response {
-    let res = tauri_plugin_http::reqwest::get("https://markterence.github.io/discord-quest-completer/detectable.json").await;
-    tauri::ipc::Response::new(res.unwrap().text().await.unwrap())
+const GAMELIST_GH_MIRROR_URL: &str =
+    "https://markterence.github.io/discord-quest-completer/detectable.json";
+const GAMELIST_DISCORD_URL: &str = "https://discord.com/api/applications/detectable";
+
+/// Fetches a JSON game list and returns the raw body to the frontend.
+/// Bounded by a timeout so a slow/unreachable host can never block the UI forever,
+/// and returns an `Err` instead of panicking on network failures.
+async fn fetch_game_list_response(url: &str) -> Result<tauri::ipc::Response, String> {
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let res = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Request to {} failed: {}", url, e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("{} returned HTTP {}", url, res.status()));
+    }
+
+    let body = res
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response from {}: {}", url, e))?;
+
+    Ok(tauri::ipc::Response::new(body))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn fetch_gamelist_from_discord() -> tauri::ipc::Response {
-    let res = tauri_plugin_http::reqwest::get("https://discord.com/api/applications/detectable").await;
-    tauri::ipc::Response::new(res.unwrap().text().await.unwrap())
+async fn fetch_gamelist_gh_mirror() -> Result<tauri::ipc::Response, String> {
+    fetch_game_list_response(GAMELIST_GH_MIRROR_URL).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+async fn fetch_gamelist_from_discord() -> Result<tauri::ipc::Response, String> {
+    fetch_game_list_response(GAMELIST_DISCORD_URL).await
+}
+
+fn gamelist_cache_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {}", e))?;
+
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+
+    Ok(dir.join("gamelist.cache.json"))
+}
+
+/// Returns the last successfully fetched game list, so the app works offline
+/// and never has to wait for the network before searching.
+#[tauri::command(rename_all = "snake_case")]
+fn read_gamelist_cache(app: AppHandle) -> Result<String, String> {
+    let path = gamelist_cache_path(&app)?;
+    fs::read_to_string(&path).map_err(|e| format!("Failed to read game list cache: {}", e))
+}
+
+#[tauri::command(rename_all = "snake_case")]
+fn write_gamelist_cache(app: AppHandle, data: String) -> Result<(), String> {
+    let path = gamelist_cache_path(&app)?;
+    fs::write(&path, data).map_err(|e| format!("Failed to write game list cache: {}", e))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -448,7 +504,9 @@ pub fn run() {
             connect_to_discord_rpc_3,
             run_background_process,
             fetch_gamelist_gh_mirror,
-            fetch_gamelist_from_discord
+            fetch_gamelist_from_discord,
+            read_gamelist_cache,
+            write_gamelist_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
