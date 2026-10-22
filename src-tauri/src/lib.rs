@@ -204,7 +204,19 @@ async fn create_fake_game(
                 target_executable_path
             ))
         }
-        Err(e) => Err(format!("Failed to copy dummy executable: {}", e)),
+        Err(e) => {
+            // A dummy instance from an earlier Play can still hold the file (Windows
+            // locks a running exe). The file on disk is already the runner, so reuse
+            // it instead of failing the launch with "file is being used".
+            if target_executable_path.exists() {
+                Ok(format!(
+                    "Reusing existing dummy executable: {:?} ({})",
+                    target_executable_path, e
+                ))
+            } else {
+                Err(format!("Failed to copy dummy executable: {}", e))
+            }
+        }
     }
 }
 

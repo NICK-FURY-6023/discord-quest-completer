@@ -160,7 +160,7 @@ function isGameInstalled(game: Game | null) {
 }
 
 /* ------------------------------------------------------------------ *
- * Running sessions (quest progress + auto-stop)
+ * Running sessions
  * ------------------------------------------------------------------ */
 interface GameSession {
     key: string;
@@ -172,22 +172,10 @@ interface GameSession {
 
 const sessions = ref<GameSession[]>([]);
 const now = ref(Date.now());
-// Off by default: a session keeps the game running (Discord shows it playing)
-// until it is stopped explicitly. Auto-stop is only for people who want a cap.
-const autoStopEnabled = ref(false);
-const autoStopMinutes = ref(15);
 
 useIntervalFn(() => {
     now.value = Date.now();
 }, 1000);
-
-function autoStopLimitMinutes(): number {
-    // The number input can be empty, which gives NaN.
-    const minutes = Number(autoStopMinutes.value);
-    return Math.min(Math.max(Number.isFinite(minutes) ? minutes : 15, 1), 180);
-}
-
-const targetMinutes = computed(() => (autoStopEnabled.value ? autoStopLimitMinutes() : 15));
 
 function sessionElapsed(session: GameSession): number {
     return Math.max(0, Math.floor((now.value - session.startedAt) / 1000));
@@ -198,10 +186,6 @@ function formatDuration(totalSeconds: number): string {
     const minutes = Math.floor(safe / 60);
     const seconds = safe % 60;
     return `${minutes}:${String(seconds).padStart(2, '0')}`;
-}
-
-function sessionProgress(session: GameSession): number {
-    return Math.min(100, (sessionElapsed(session) / (targetMinutes.value * 60)) * 100);
 }
 
 function startSession(game: Game, executable: GameExecutable) {
@@ -233,27 +217,6 @@ function stopSession(session: GameSession) {
     }
     void stopPlaying({ game, executable: session.executable });
 }
-
-watch(now, () => {
-    if (!autoStopEnabled.value) {
-        return;
-    }
-    const limitSeconds = autoStopLimitMinutes() * 60;
-
-    for (const session of [...sessions.value]) {
-        if (sessionElapsed(session) < limitSeconds) {
-            continue;
-        }
-        const game = gameList.value.find(item => item.uid === session.gameUid);
-        if (!game) {
-            sessions.value = sessions.value.filter(item => item.key !== session.key);
-            continue;
-        }
-        sessions.value = sessions.value.filter(item => item.key !== session.key);
-        addLog('info', `Auto-stopped ${session.gameName} after ${autoStopMinutes.value} minute(s).`);
-        void stopPlaying({ game, executable: session.executable });
-    }
-});
 
 /* ------------------------------------------------------------------ *
  * Custom game (any Discord app ID, not just detectable ones)
@@ -712,27 +675,11 @@ provide<GameActionsProvider>(GameActionsKey, {
                                 {{ session.executable.name }}
                             </div>
                             <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                {{ formatDuration(sessionElapsed(session)) }} elapsed &middot;
-                                <template v-if="autoStopEnabled">
-                                    stops in {{ formatDuration(targetMinutes * 60 - sessionElapsed(session)) }}
-                                </template>
-                                <template v-else>running until you press Stop</template>
-                            </div>
-                            <div v-if="autoStopEnabled" class="mt-1 h-1.5 bg-gray-200 dark:bg-gray-700 rounded overflow-hidden">
-                                <div class="h-full bg-green-500 rounded transition-all duration-500"
-                                    :style="{ width: sessionProgress(session) + '%' }"></div>
+                                {{ formatDuration(sessionElapsed(session)) }} elapsed &middot; running until you press Stop
                             </div>
                         </div>
                     </div>
 
-                    <label class="mt-4 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                        <input v-model="autoStopEnabled" type="checkbox" class="accent-indigo-600" />
-                        Auto-stop after
-                        <input v-model.number="autoStopMinutes" type="number" min="1" max="180"
-                            class="w-16 px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-                            :disabled="!autoStopEnabled" />
-                        min
-                    </label>
                 </div>
             </div>
         </div>
