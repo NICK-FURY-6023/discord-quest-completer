@@ -56,21 +56,18 @@ jobs:
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-index-
 
-      - name: Get Game List from Discord API
+      - name: Update bundled game list
         shell: bash
+        # Writes a trimmed snapshot straight from the mirror the app also refreshes
+        # from, so releases ship a ~3.7 MB game list instead of the raw ~13 MB payload.
         run: |
-          # Téléchargement direct depuis l'API Discord
-          curl -L -o src/assets/gamelist.json "https://discord.com/api/v10/applications/detectable"
-          
-          if [ ! -f src/assets/gamelist.json ]; then
-            echo "Failed to download game list from Discord"
-            exit 1
-          fi
+          pnpm update:gamelist || pnpm update:gamelist "https://discord.com/api/v10/applications/detectable" || echo "::warning::Could not refresh the game list, shipping the committed snapshot"
+
           if [ ! -s src/assets/gamelist.json ]; then
             echo "Game list is empty"
             exit 1
           fi
-      
+
       # Build src-win
       - name: Build src-win project x86_64 binary
         if: matrix.platform == 'windows-latest'
@@ -88,6 +85,11 @@ jobs:
     
       - name: install frontend dependencies
         run: pnpm install
+
+      - name: typecheck frontend
+        shell: bash
+        # Fails fast on Vue/TS errors before the slow Rust build starts.
+        run: pnpm exec vue-tsc --noEmit
 
       - uses: tauri-apps/tauri-action@v0
         env:

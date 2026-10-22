@@ -57,21 +57,19 @@ jobs:
           key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-index-
 
-      - name: Get Game List
+      - name: Update bundled game list
         shell: bash
         env:
+          # Optional: when set, it replaces the default mirror as the download source.
           GAME_LIST_URL: ${{ secrets.GAME_LIST_URL }}
         run: |
-          curl -L -o src/assets/gamelist.json $GAME_LIST_URL
-          if [ ! -f src/assets/gamelist.json ]; then
-            echo "Failed to download game list"
-            exit 1
-          fi
+          pnpm update:gamelist || echo "::warning::Could not refresh the game list, shipping the committed snapshot"
+
           if [ ! -s src/assets/gamelist.json ]; then
             echo "Game list is empty"
             exit 1
           fi
-      
+
       # Build src-win
       - name: Build src-win project x86_64 binary
         if: matrix.platform == 'windows-latest'
@@ -89,6 +87,11 @@ jobs:
 
       - name: install frontend dependencies
         run: pnpm install
+
+      - name: typecheck frontend
+        shell: bash
+        # Fails fast on Vue/TS errors before the slow Rust build starts.
+        run: pnpm exec vue-tsc --noEmit
 
       - uses: tauri-apps/tauri-action@v0
         env:

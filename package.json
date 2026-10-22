@@ -15,6 +15,7 @@
     "build:runner:darwin": "cd ./src-darwin && cargo build --release && cd ..",
     "copy:runner:darwin": "cp ./src-darwin/target/release/src-darwin ./src-tauri/resources/src-darwin",
     "sync:runner": "node scripts/sync-runner.mjs",
+    "update:gamelist": "node scripts/update-gamelist.mjs",
     "tauri:dev": "tauri dev"
   },
   "dependencies": {
