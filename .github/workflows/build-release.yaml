@@ -191,9 +191,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.version }}
-          name: Pre-Release ${{ env.version }}
+          name: Release ${{ env.version }}
           body: |
-            Cross-platform pre-release built from `${{ github.sha }}`.
+            Cross-platform release built from `${{ github.sha }}`.
 
             | Platform | Portable build | Installer |
             | --- | --- | --- |
@@ -223,7 +223,7 @@ jobs:
             artifacts/tauri-linux-x64/bundle/**/*.deb
             artifacts/tauri-linux-x64/bundle/**/*.AppImage
             artifacts/tauri-macos-arm64/bundle/**/*.dmg
-          prerelease: true
-          draft: true
+          prerelease: false
+          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
