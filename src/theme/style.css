@@ -100,7 +100,6 @@ body {
     var(--glass-surface);
   border: 1px solid var(--glass-border);
   backdrop-filter: blur(var(--glass-blur)) saturate(150%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
 }
 
@@ -111,7 +110,6 @@ body {
   border: 1px solid var(--glass-border);
   border-radius: 16px;
   backdrop-filter: blur(var(--glass-blur)) saturate(150%);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
   box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
 }
 
@@ -122,7 +120,6 @@ body {
   border: 1px solid var(--glass-border);
   border-radius: 12px;
   backdrop-filter: blur(10px) saturate(130%);
-  -webkit-backdrop-filter: blur(10px) saturate(130%);
 }
 
 .sidebar-glass {
@@ -131,13 +128,12 @@ body {
     color-mix(in srgb, var(--bg-sidebar) 74%, transparent);
   border-right: 1px solid var(--glass-border);
   backdrop-filter: blur(24px) saturate(150%);
-  -webkit-backdrop-filter: blur(24px) saturate(150%);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .dropdown-panel {
-  max-height: min(26rem, calc(100dvh - 13rem));
+  max-height: min(26rem, calc(100dvh - 17rem));
   overflow-y: auto;
   overscroll-behavior: contain;
   background:
@@ -146,7 +142,6 @@ body {
   border: 1px solid var(--glass-border);
   border-radius: 14px;
   backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
   box-shadow: 0 34px 70px -30px rgba(0, 0, 0, 0.8), inset 0 1px 0 var(--glass-highlight);
 }
 
@@ -207,7 +202,6 @@ body {
   border-color: var(--glass-border);
   color: var(--text-muted);
   backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 .btn-quiet:hover:not(:disabled) {
   background: var(--bg-hover);
@@ -238,7 +232,6 @@ body {
   border: 1px solid var(--glass-border);
   background: var(--glass-soft);
   backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   color: var(--text);
   padding: 0.55rem 0.75rem;
   font-size: 0.875rem;
@@ -418,7 +411,6 @@ body {
   border: 1px solid var(--glass-border);
   background: var(--glass-soft);
   backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
   border-radius: 12px;
   cursor: pointer;
   transition: border-color 120ms ease, background-color 120ms ease;
@@ -441,7 +433,6 @@ body {
   border: 1px solid var(--glass-border);
   border-radius: 16px;
   backdrop-filter: blur(26px) saturate(160%);
-  -webkit-backdrop-filter: blur(26px) saturate(160%);
   box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.8), inset 0 1px 0 var(--glass-highlight);
 }
 
@@ -458,6 +449,5 @@ body {
   color: var(--text);
   border-radius: 12px;
   backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
   box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.65), inset 0 1px 0 var(--glass-highlight);
 }

@@ -553,8 +553,9 @@ provide<GameActionsProvider>(GameActionsKey, {
             Could not refresh the game list: {{ lastError }}
         </p>
 
-        <!-- Search -->
-        <section class="panel p-4">
+        <!-- Search: raised above the sibling panels so the results dropdown can
+             overlap them (glass panels are their own stacking contexts). -->
+        <section class="panel p-4 relative z-10">
             <GameSearch :games="gameDB" :is-ready="isReady" :is-refreshing="isRefreshing" :info="info"
                 @add="addGameToList" @refresh="fetchGameList" />
             <div class="mt-3 flex items-start justify-between gap-3 text-xs">

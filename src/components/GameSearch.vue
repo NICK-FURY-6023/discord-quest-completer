@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, useTemplateRef, toRef } from 'vue';
-import { onClickOutside } from '@vueuse/core';
+import { computed, nextTick, ref, useTemplateRef, toRef, watch } from 'vue';
+import { onClickOutside, useEventListener } from '@vueuse/core';
 import type { Game } from '@/types/types';
 import type { GameListInfo } from '@/composables/fetch-gamelist';
 import { useGameSearch } from '@/composables/use-game-search';
@@ -20,6 +20,55 @@ const emit = defineEmits<{
 const rootRef = useTemplateRef<HTMLElement>('rootRef');
 const inputRef = useTemplateRef<HTMLInputElement>('inputRef');
 const open = ref(false);
+
+/**
+ * The dropdown is absolutely positioned, so its height has to be derived from the
+ * space that is actually left in the window. A fixed max-height overflows the
+ * bottom of small windows and hides results behind the fold.
+ */
+const DROPDOWN_MAX = 416;
+const dropdownStyle = ref<Record<string, string>>({});
+
+function positionDropdown() {
+    const root = rootRef.value;
+    if (!root) return;
+    const rect = root.getBoundingClientRect();
+    const margin = 12;
+    const spaceBelow = window.innerHeight - rect.bottom - margin;
+    const spaceAbove = rect.top - margin;
+
+    if (spaceBelow < 240 && spaceAbove > spaceBelow) {
+        dropdownStyle.value = {
+            top: 'auto',
+            bottom: 'calc(100% + 0.5rem)',
+            maxHeight: `${Math.max(160, Math.min(DROPDOWN_MAX, spaceAbove))}px`,
+        };
+        return;
+    }
+    dropdownStyle.value = {
+        top: 'calc(100% + 0.5rem)',
+        bottom: 'auto',
+        maxHeight: `${Math.max(160, Math.min(DROPDOWN_MAX, spaceBelow))}px`,
+    };
+}
+
+watch(open, (isOpen) => {
+    if (isOpen) {
+        void nextTick(positionDropdown);
+    }
+});
+
+useEventListener(window, 'resize', () => {
+    if (open.value) positionDropdown();
+});
+useEventListener(
+    window,
+    'scroll',
+    () => {
+        if (open.value) positionDropdown();
+    },
+    { capture: true },
+);
 
 const {
     platform,
@@ -138,7 +187,7 @@ function executablesForPlatform(game: Game) {
             </div>
         </div>
 
-        <div v-if="open" class="dropdown-panel absolute z-50 mt-2 w-full">
+        <div v-if="open" class="dropdown-panel absolute z-50 w-full" :style="dropdownStyle">
             <div class="sticky top-0 z-10 px-3 py-2"
                 style="background: var(--bg-panel); border-bottom: 1px solid var(--border)">
                 <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs faint">
