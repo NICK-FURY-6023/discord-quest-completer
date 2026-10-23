@@ -7,7 +7,7 @@ import { useGlobalState } from '@/composables/app-state';
 import { useFetchGameList } from '@/composables/fetch-gamelist';
 import { useSessions, formatClock } from '@/composables/use-sessions';
 import { useSelectedGames } from '@/composables/use-selected-games';
-import { useSettings, ACCENTS, clampMinutes, type AccentName, type ThemeMode } from '@/composables/use-settings';
+import { useSettings, ACCENTS, clampMinutes, clampPartySize, type AccentName, type ThemeMode } from '@/composables/use-settings';
 import { useToasts } from '@/composables/use-toasts';
 
 const { logs, clearLogs } = useGlobalState();
@@ -102,6 +102,12 @@ function updateQuestMinutes(event: Event) {
     const target = event.target as HTMLInputElement;
     settings.questMinutes = clampMinutes(target.value);
     target.value = String(settings.questMinutes);
+}
+
+function updatePartyMax(event: Event) {
+    const target = event.target as HTMLInputElement;
+    settings.partyMax = clampPartySize(target.value);
+    target.value = String(settings.partyMax);
 }
 
 function logTone(type: string) {
@@ -228,6 +234,18 @@ function logTone(type: string) {
                     </span>
                     <input id="quest-minutes" class="input w-24 text-center" type="number" min="1" max="240"
                         :value="settings.questMinutes" @change="updateQuestMinutes" />
+                </label>
+
+                <div class="divider my-1"></div>
+
+                <label class="toggle-row" for="party-max">
+                    <span>
+                        <span class="text-sm" style="color: var(--text)">Party size on Discord</span>
+                        <span class="block text-xs faint">Adds a party of {{ settings.partyMax }} and a Join secret to the
+                            RPC presence. Set 1 to hide the party.</span>
+                    </span>
+                    <input id="party-max" class="input w-24 text-center" type="number" min="1" max="25"
+                        :value="settings.partyMax" @change="updatePartyMax" />
                 </label>
 
                 <div class="divider my-1"></div>

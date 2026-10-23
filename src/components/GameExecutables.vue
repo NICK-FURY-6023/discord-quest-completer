@@ -13,10 +13,22 @@
             a fallback.
         </p>
 
-        <p v-if="filteredExecutables.length === 0" class="text-sm" style="color: var(--warning)">
-            Either Discord has not registered any launchable executables for this game,
-            or there are no executables available for your platform ({{ currentPlatform }}).
-        </p>
+        <div v-if="filteredExecutables.length === 0" class="space-y-3">
+            <p class="text-sm" style="color: var(--warning)">
+                Discord has no registered executable for this game (or none for {{ currentPlatform }}), so the
+                dummy-process method cannot show it.
+            </p>
+            <button v-if="game.is_running" class="btn btn-danger w-full" @click="emit('stop_rpc', props.game)">
+                Stop RPC activity
+            </button>
+            <button v-else class="btn btn-accent w-full" @click="emit('play_rpc', props.game)">
+                Play via Discord RPC (experimental)
+            </button>
+            <p class="text-xs faint">
+                Rich Presence is the only way to show a game Discord has no executable for. It is experimental, so
+                Discord may treat it as suspicious activity.
+            </p>
+        </div>
 
         <div class="space-y-2">
             <div v-for="executable in filteredExecutables" :key="executable.name"
@@ -56,6 +68,8 @@ const emit = defineEmits<{
     play: [{ game: Game, executable: GameExecutable }]
     stop: [{ game: Game, executable: GameExecutable }]
     install_and_play: [{ game: Game, executable: GameExecutable }]
+    play_rpc: [game: Game]
+    stop_rpc: [game: Game]
 }>();
 
 const gameActions = inject<GameActionsProvider>(GameActionsKey);

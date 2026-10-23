@@ -52,10 +52,9 @@ function toastToneClass(tone: string) {
 </script>
 
 <template>
-    <div class="flex h-dvh overflow-hidden" style="background: var(--bg-app)">
+    <div class="flex h-dvh overflow-hidden">
         <!-- Sidebar -->
-        <aside class="w-[15rem] shrink-0 flex flex-col px-3 py-4 gap-4"
-            style="background: var(--bg-sidebar); border-right: 1px solid var(--border)">
+        <aside class="sidebar-glass w-[15rem] shrink-0 flex flex-col px-3 py-4 gap-4">
             <div class="flex items-center gap-2.5 px-1">
                 <div class="w-9 h-9 rounded-xl grid place-items-center shrink-0"
                     style="background: var(--accent); box-shadow: 0 6px 18px -8px var(--accent)">
@@ -70,7 +69,7 @@ function toastToneClass(tone: string) {
                 </div>
             </div>
 
-            <nav class="flex flex-col gap-1" aria-label="Main">
+            <nav class="flex flex-col gap-1 shrink-0" aria-label="Main">
                 <button v-for="item in navItems" :key="item.page" class="nav-link"
                     :class="{ 'nav-link-active': page === item.page }"
                     :aria-current="page === item.page ? 'page' : undefined" @click="setPage(item.page)">

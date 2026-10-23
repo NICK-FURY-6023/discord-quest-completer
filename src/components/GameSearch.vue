@@ -138,14 +138,13 @@ function executablesForPlatform(game: Game) {
             </div>
         </div>
 
-        <div v-if="open" class="absolute z-50 mt-2 w-full panel overflow-hidden"
-            style="box-shadow: 0 24px 45px -20px rgba(0, 0, 0, 0.65)">
+        <div v-if="open" class="dropdown-panel absolute z-50 mt-2 w-full">
             <div class="sticky top-0 z-10 px-3 py-2"
                 style="background: var(--bg-panel); border-bottom: 1px solid var(--border)">
                 <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs faint">
                     <label class="flex items-center gap-1.5 cursor-pointer">
                         <input v-model="onlyLaunchable" type="checkbox" class="accent-[var(--accent)]" />
-                        Launchable only
+                        Process mode only
                     </label>
                     <label class="flex items-center gap-1.5 cursor-pointer">
                         <input v-model="platformOnly" type="checkbox" class="accent-[var(--accent)]" />
@@ -164,11 +163,12 @@ function executablesForPlatform(game: Game) {
 
             <div v-else-if="!trimmedQuery" class="p-4 text-sm muted space-y-1">
                 <p>
-                    Search by game name, alias, app ID or executable name.
-                    {{ launchableCount.toLocaleString() }} of {{ listSize.toLocaleString() }} games can be launched.
+                    Search by game name, alias, app ID or executable name. All
+                    {{ listSize.toLocaleString() }} games can be played.
                 </p>
                 <p class="text-xs faint">
-                    Pick a game to queue it, then press Play on the right side.
+                    {{ launchableCount.toLocaleString() }} have a Discord-registered executable (process
+                    mode); the rest play through Rich Presence (RPC mode).
                 </p>
             </div>
 
@@ -179,7 +179,7 @@ function executablesForPlatform(game: Game) {
             <div v-else-if="showNoResult" class="p-4 text-sm muted space-y-1">
                 <p>No game found for "{{ trimmedQuery }}".</p>
                 <p class="text-xs faint">
-                    Try a shorter name, an alias, an app ID, or untick "Launchable only".
+                    Try a shorter name, an alias or an app ID. Every game in the list is playable.
                 </p>
             </div>
 
@@ -194,7 +194,7 @@ function executablesForPlatform(game: Game) {
                         <div class="min-w-0">
                             <div class="font-medium flex flex-wrap items-center gap-1.5" style="color: var(--text)">
                                 <span>{{ game.name }}</span>
-                                <span v-if="!game.launchable" class="chip chip-warning">no executable</span>
+                                <span v-if="!game.launchable" class="chip chip-warning">RPC mode</span>
                             </div>
                             <div class="text-xs faint mt-0.5">App ID: {{ game.id }}</div>
                             <div v-if="game.executables.length" class="text-xs faint mt-1 font-mono truncate">

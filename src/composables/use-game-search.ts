@@ -38,7 +38,9 @@ export function useGameSearch(source: Ref<Game[]>) {
     const query = shallowRef('');
     const debouncedQuery = refDebounced(query, 150);
 
-    const onlyLaunchable = ref(true);
+    // Every game in the list can be played (process mode when Discord registered an
+    // executable, RPC mode otherwise), so the filter starts off.
+    const onlyLaunchable = ref(false);
     const platformOnly = ref(false);
 
     const visibleCount = ref(PAGE_SIZE);

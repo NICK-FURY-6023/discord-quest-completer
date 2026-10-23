@@ -2,8 +2,18 @@
 import { computed, onMounted, ref } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { Pages, useGlobalState } from '@/composables/app-state';
-import { formatClock, useSessions } from '@/composables/use-sessions';
+import {
+    endReasonLabel,
+    formatClock,
+    formatDayLabel,
+    formatStamp,
+    useSessions,
+    type SessionHistoryEntry,
+} from '@/composables/use-sessions';
 import { useSettings } from '@/composables/use-settings';
+import { useFetchGameList } from '@/composables/fetch-gamelist';
+import { useSelectedGames } from '@/composables/use-selected-games';
+import { useToasts } from '@/composables/use-toasts';
 
 interface DiscordQuestEntry {
     name: string;
@@ -18,6 +28,9 @@ interface DiscordQuestScan {
 
 const { setPage } = useGlobalState();
 const { settings } = useSettings();
+const { gameDB } = useFetchGameList();
+const { addGame } = useSelectedGames();
+const { push } = useToasts();
 const {
     sessions,
     history,
@@ -32,6 +45,51 @@ const {
 
 const discordScan = ref<DiscordQuestScan | null>(null);
 const isScanning = ref(false);
+
+const historyFilter = ref<'all' | 'completed' | 'stopped'>('all');
+const historyFilters = [
+    { value: 'all', label: 'All' },
+    { value: 'completed', label: 'Completed' },
+    { value: 'stopped', label: 'Stopped early' },
+] as const;
+
+const filteredHistory = computed(() =>
+    history.value.filter(entry => {
+        if (historyFilter.value === 'completed') return entry.completed;
+        if (historyFilter.value === 'stopped') return !entry.completed;
+        return true;
+    }),
+);
+
+const historyGroups = computed(() => {
+    const groups: { label: string; seconds: number; entries: SessionHistoryEntry[] }[] = [];
+    for (const entry of filteredHistory.value) {
+        const label = formatDayLabel(entry.endedAt);
+        const last = groups[groups.length - 1];
+        if (last && last.label === label) {
+            last.entries.push(entry);
+            last.seconds += entry.seconds;
+        } else {
+            groups.push({ label, seconds: entry.seconds, entries: [entry] });
+        }
+    }
+    return groups;
+});
+
+/** Sends the game back to Home so the same entry can be played again. */
+function replay(entry: SessionHistoryEntry) {
+    const game = gameDB.value.find(item => item.id === entry.gameId);
+    if (!game) {
+        push(`${entry.gameName} is not in the current game list`, 'warning');
+        return;
+    }
+    const added = addGame(game);
+    push(
+        added ? `${game.name} added — press Play on Home` : `${game.name} is already in your game list`,
+        added ? 'success' : 'warning',
+    );
+    setPage(Pages.HOME);
+}
 
 function isTauri(): boolean {
     return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -132,8 +190,19 @@ function relativeTime(timestamp: number): string {
                                 <span v-if="isComplete(session)" class="chip chip-success">quest complete</span>
                                 <span v-else class="chip chip-accent">in progress</span>
                             </div>
-                            <p class="text-xs font-mono mt-1 truncate faint">{{ session.executable.name }}</p>
-                            <p class="text-xs mt-1 faint">App ID {{ session.gameId }}</p>
+                            <span class="chip" :class="session.mode === 'rpc' ? 'chip-warning' : 'chip-accent'">
+                                {{ session.mode === 'rpc' ? 'RPC mode' : 'process mode' }}
+                            </span>
+                            <p class="text-xs font-mono mt-2 truncate faint">{{ session.executable.name }}</p>
+                            <p class="text-xs mt-1 faint">
+                                App ID {{ session.gameId }} · started {{ formatStamp(session.startedAt) }}
+                            </p>
+                            <div v-if="session.party" class="flex items-center gap-2 mt-2" data-party>
+                                <span class="party-member" aria-hidden="true">Y</span>
+                                <span class="text-xs faint">
+                                    {{ session.party.size }} of {{ session.party.max }} players in the Discord party
+                                </span>
+                            </div>
                         </div>
                         <button class="btn btn-danger shrink-0" @click="requestStop(session)">Stop</button>
                     </div>
@@ -184,23 +253,75 @@ function relativeTime(timestamp: number): string {
         </section>
 
         <section class="panel p-5">
-            <div class="flex items-center justify-between gap-3 mb-2">
-                <h2 class="font-semibold" style="color: var(--text)">Recent sessions</h2>
-                <button v-if="history.length" class="btn btn-ghost text-xs" @click="clearHistory">Clear history</button>
-            </div>
-            <p v-if="!history.length" class="text-sm muted py-3">Finished sessions will show up here.</p>
-            <ul v-else class="divide-y" style="border-color: var(--border)">
-                <li v-for="entry in history" :key="entry.key + entry.startedAt"
-                    class="flex items-center justify-between gap-3 py-2.5">
-                    <div class="min-w-0">
-                        <p class="text-sm truncate" style="color: var(--text)">{{ entry.gameName }}</p>
-                        <p class="text-xs faint">{{ relativeTime(entry.endedAt) }} · {{ formatClock(entry.seconds) }}</p>
+            <div class="flex items-start justify-between gap-3 flex-wrap">
+                <div>
+                    <h2 class="font-semibold" style="color: var(--text)">Recent sessions</h2>
+                    <p class="text-xs mt-1 faint">
+                        Exact start and end time, duration and how each session ended.
+                    </p>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap">
+                    <div class="flex gap-1" role="group" aria-label="History filter">
+                        <button v-for="option in historyFilters" :key="option.value" class="btn text-xs"
+                            :class="historyFilter === option.value ? 'btn-accent' : 'btn-quiet'"
+                            :aria-pressed="historyFilter === option.value"
+                            @click="historyFilter = option.value">
+                            {{ option.label }}
+                        </button>
                     </div>
-                    <span class="chip" :class="entry.completed ? 'chip-success' : ''">
-                        {{ entry.completed ? 'completed' : 'stopped early' }}
-                    </span>
-                </li>
-            </ul>
+                    <button v-if="history.length" class="btn btn-ghost text-xs" @click="clearHistory">Clear
+                        history</button>
+                </div>
+            </div>
+
+            <p v-if="!history.length" class="text-sm muted py-3">Finished sessions will show up here.</p>
+            <p v-else-if="!filteredHistory.length" class="text-sm muted py-3">No session matches this filter.</p>
+
+            <div v-else class="mt-4 space-y-5">
+                <div v-for="group in historyGroups" :key="group.label">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <span class="panel-title">{{ group.label }}</span>
+                        <span class="text-xs faint">
+                            {{ group.entries.length }} session{{ group.entries.length === 1 ? '' : 's' }} ·
+                            {{ formatClock(group.seconds) }} tracked
+                        </span>
+                    </div>
+                    <ul class="space-y-2">
+                        <li v-for="entry in group.entries" :key="entry.key + entry.startedAt"
+                            class="panel-soft p-3" data-history-entry>
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <p class="text-sm truncate flex items-center gap-1.5 flex-wrap"
+                                        style="color: var(--text)">
+                                        {{ entry.gameName }}
+                                        <span class="chip"
+                                            :class="entry.mode === 'rpc' ? 'chip-warning' : 'chip-accent'">
+                                            {{ entry.mode === 'rpc' ? 'RPC' : 'process' }}
+                                        </span>
+                                    </p>
+                                    <p class="text-xs faint mt-1" data-history-timespan>
+                                        {{ formatStamp(entry.startedAt) }} → {{ formatStamp(entry.endedAt) }}
+                                        · {{ formatClock(entry.seconds) }}
+                                    </p>
+                                    <p class="text-xs faint">
+                                        {{ endReasonLabel(entry.endReason) }} · App ID {{ entry.gameId }}
+                                        <template v-if="entry.party">
+                                            · party {{ entry.party.size }} of {{ entry.party.max }}
+                                        </template>
+                                        · {{ relativeTime(entry.endedAt) }}
+                                    </p>
+                                </div>
+                                <div class="flex flex-col items-end gap-1.5 shrink-0">
+                                    <span class="chip" :class="entry.completed ? 'chip-success' : ''">
+                                        {{ entry.completed ? 'completed' : 'stopped early' }}
+                                    </span>
+                                    <button class="btn btn-ghost text-xs" @click="replay(entry)">Play again</button>
+                                </div>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
         </section>
     </div>
 </template>

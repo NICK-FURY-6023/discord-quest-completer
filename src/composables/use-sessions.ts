@@ -4,6 +4,17 @@ import type { Game, GameExecutable } from '@/types/types';
 import { useSettings } from './use-settings';
 import { useToasts } from './use-toasts';
 
+/** How the game is being shown in Discord: a dummy process or an RPC activity. */
+export type SessionMode = 'process' | 'rpc';
+
+/** Party size Discord shows on the profile card, e.g. "1 of 4 players". */
+export interface SessionParty {
+    size: number;
+    max: number;
+}
+
+export type SessionEndReason = 'stopped' | 'app-closed' | 'rpc-disconnected';
+
 export interface GameSession {
     key: string;
     gameUid: string;
@@ -13,6 +24,8 @@ export interface GameSession {
     startedAt: number;
     /** Set once the estimated quest time has been reached. */
     completedAt: number | null;
+    mode: SessionMode;
+    party: SessionParty | null;
 }
 
 export interface SessionHistoryEntry {
@@ -23,10 +36,32 @@ export interface SessionHistoryEntry {
     endedAt: number;
     seconds: number;
     completed: boolean;
+    mode: SessionMode;
+    party: SessionParty | null;
+    endReason: SessionEndReason;
 }
 
 const HISTORY_KEY = 'dqc:session-history:v1';
-const HISTORY_LIMIT = 30;
+const HISTORY_LIMIT = 60;
+
+function isMode(value: unknown): value is SessionMode {
+    return value === 'process' || value === 'rpc';
+}
+
+function isParty(value: unknown): value is SessionParty {
+    if (!value || typeof value !== 'object') return false;
+    const party = value as Partial<SessionParty>;
+    return (
+        typeof party.size === 'number' &&
+        typeof party.max === 'number' &&
+        party.size > 0 &&
+        party.max >= party.size
+    );
+}
+
+function isEndReason(value: unknown): value is SessionEndReason {
+    return value === 'stopped' || value === 'app-closed' || value === 'rpc-disconnected';
+}
 
 function loadHistory(): SessionHistoryEntry[] {
     try {
@@ -35,7 +70,23 @@ function loadHistory(): SessionHistoryEntry[] {
         const parsed: unknown = JSON.parse(raw);
         if (!Array.isArray(parsed)) return [];
         return parsed
-            .filter((entry): entry is SessionHistoryEntry => !!entry && typeof entry.gameName === 'string' && typeof entry.startedAt === 'number')
+            .filter(
+                (entry): entry is SessionHistoryEntry =>
+                    !!entry &&
+                    typeof entry.gameName === 'string' &&
+                    typeof entry.startedAt === 'number' &&
+                    typeof entry.endedAt === 'number',
+            )
+            .map(entry => ({
+                ...entry,
+                key: typeof entry.key === 'string' ? entry.key : `${entry.gameId}:${entry.startedAt}`,
+                seconds: Number.isFinite(entry.seconds) ? entry.seconds : Math.max(0, Math.round((entry.endedAt - entry.startedAt) / 1000)),
+                completed: entry.completed === true,
+                // Older entries were always dummy processes stopped by the user.
+                mode: isMode(entry.mode) ? entry.mode : 'process',
+                party: isParty(entry.party) ? entry.party : null,
+                endReason: isEndReason(entry.endReason) ? entry.endReason : 'stopped',
+            }))
             .slice(0, HISTORY_LIMIT);
     } catch {
         return [];
@@ -44,6 +95,11 @@ function loadHistory(): SessionHistoryEntry[] {
 
 export function sessionKey(game: Game, executable: GameExecutable): string {
     return `${game.id}:${executable.name}`;
+}
+
+/** Marker executable used for sessions that run through Discord RPC instead of a process. */
+export function rpcExecutable(game: Game): GameExecutable {
+    return { is_launcher: false, name: `Discord RPC activity (${game.id})`, os: 'rpc' };
 }
 
 export function formatClock(totalSeconds: number): string {
@@ -55,6 +111,48 @@ export function formatClock(totalSeconds: number): string {
         return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     }
     return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+/** Exact start/end stamp, e.g. "23 Oct 2026, 08:12:04". */
+export function formatStamp(timestamp: number): string {
+    return new Date(timestamp).toLocaleString(undefined, {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
+}
+
+export function formatTimeOfDay(timestamp: number): string {
+    return new Date(timestamp).toLocaleTimeString(undefined, {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
+}
+
+/** "Today", "Yesterday" or a date, used to group the session history. */
+export function formatDayLabel(timestamp: number): string {
+    const date = new Date(timestamp);
+    const today = new Date();
+    const startOfDay = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime();
+    const dayDiff = Math.round((startOfDay(today) - startOfDay(date)) / 86_400_000);
+    if (dayDiff === 0) return 'Today';
+    if (dayDiff === 1) return 'Yesterday';
+    return date.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+export function endReasonLabel(reason: SessionEndReason): string {
+    switch (reason) {
+        case 'app-closed':
+            return 'app closed';
+        case 'rpc-disconnected':
+            return 'RPC disconnected';
+        default:
+            return 'stopped by you';
+    }
 }
 
 export const useSessions = createGlobalState(() => {
@@ -100,7 +198,7 @@ export const useSessions = createGlobalState(() => {
         }
     }
 
-    function archive(session: GameSession, endedAt: number) {
+    function archive(session: GameSession, endedAt: number, endReason: SessionEndReason) {
         const seconds = Math.max(0, Math.floor((endedAt - session.startedAt) / 1000));
         const entry: SessionHistoryEntry = {
             key: session.key,
@@ -110,37 +208,49 @@ export const useSessions = createGlobalState(() => {
             endedAt,
             seconds,
             completed: session.completedAt !== null || seconds >= questSeconds.value,
+            mode: session.mode,
+            party: session.party,
+            endReason,
         };
         history.value = [entry, ...history.value].slice(0, HISTORY_LIMIT);
         persistHistory();
     }
 
-    function start(game: Game, executable: GameExecutable) {
+    function start(
+        game: Game,
+        executable: GameExecutable,
+        mode: SessionMode = 'process',
+        party: SessionParty | null = null,
+    ) {
         const key = sessionKey(game, executable);
-        sessions.value = [
-            ...sessions.value.filter(session => session.key !== key),
-            {
-                key,
-                gameUid: game.uid ?? game.id,
-                gameId: game.id,
-                gameName: game.name,
-                executable,
-                startedAt: Date.now(),
-                completedAt: null,
-            },
-        ];
-        if (settings.notifyOnPlay) {
-            push(`Now playing ${game.name}`, 'success');
+        const existing = sessions.value.find(session => session.key === key);
+        if (existing) {
+            return existing;
         }
+        const session: GameSession = {
+            key,
+            gameUid: game.uid ?? game.id,
+            gameId: game.id,
+            gameName: game.name,
+            executable,
+            startedAt: Date.now(),
+            completedAt: null,
+            mode,
+            party,
+        };
+        sessions.value = [...sessions.value, session];
+        if (settings.notifyOnPlay) {
+            push(`Now playing ${game.name}${mode === 'rpc' ? ' (RPC mode)' : ''}`, 'success');
+        }
+        return session;
     }
 
-    /** Stops tracking a session and archives it, regardless of who stopped the process. */
-    function end(game: Game, executable: GameExecutable) {
+    function end(game: Game, executable: GameExecutable, reason: SessionEndReason = 'stopped') {
         const key = sessionKey(game, executable);
         const session = sessions.value.find(item => item.key === key);
         sessions.value = sessions.value.filter(item => item.key !== key);
         if (session) {
-            archive(session, Date.now());
+            archive(session, Date.now(), reason);
         }
     }
 
@@ -156,16 +266,17 @@ export const useSessions = createGlobalState(() => {
             stopHandler(session);
             return;
         }
-        const archived = sessions.value.find(item => item.key === session.key);
         sessions.value = sessions.value.filter(item => item.key !== session.key);
-        if (archived) {
-            archive(archived, Date.now());
-        }
+        archive(session, Date.now(), session.mode === 'rpc' ? 'rpc-disconnected' : 'stopped');
     }
 
     function findSession(gameUid: string | undefined) {
         if (!gameUid) return null;
         return sessions.value.find(session => session.gameUid === gameUid) ?? null;
+    }
+
+    function findRpcSession() {
+        return sessions.value.find(session => session.mode === 'rpc') ?? null;
     }
 
     function clearHistory() {
@@ -189,6 +300,17 @@ export const useSessions = createGlobalState(() => {
         }
     });
 
+    // Closing the window kills the runner, so close the open sessions in the same
+    // moment instead of losing them without a trace.
+    useEventListener(window, 'beforeunload', () => {
+        if (!sessions.value.length) return;
+        const endedAt = Date.now();
+        for (const session of sessions.value) {
+            archive(session, endedAt, session.mode === 'rpc' ? 'rpc-disconnected' : 'app-closed');
+        }
+        sessions.value = [];
+    });
+
     const activeCount = computed(() => sessions.value.length);
     const completedCount = computed(() => history.value.filter(entry => entry.completed).length);
 
@@ -206,6 +328,7 @@ export const useSessions = createGlobalState(() => {
         requestStop,
         setStopHandler,
         findSession,
+        findRpcSession,
         clearHistory,
         activeCount,
         completedCount,

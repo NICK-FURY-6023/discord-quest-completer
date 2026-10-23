@@ -2,7 +2,6 @@
 import { computed, provide, ref, useTemplateRef } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { path } from '@tauri-apps/api';
-import { emit } from '@tauri-apps/api/event';
 import { GameActionsProvider, GameExecutable, type Game } from '@/types/types';
 import IconVerified from '@/components/IconVerified.vue';
 import { isEmpty } from 'lodash-es';
@@ -12,9 +11,10 @@ import { GameActionsKey, getCurrentOS } from '@/constants/constants';
 import { useFetchGameList } from '@/composables/fetch-gamelist';
 import { useGlobalState } from '@/composables/app-state';
 import { useSelectedGames } from '@/composables/use-selected-games';
-import { useSessions, formatClock } from '@/composables/use-sessions';
+import { useSessions, formatClock, formatStamp, rpcExecutable } from '@/composables/use-sessions';
 import { useSettings } from '@/composables/use-settings';
 import { useToasts } from '@/composables/use-toasts';
+import { randomString } from '@/utils/random-string';
 
 type DialogKey =
     'none' |
@@ -55,6 +55,7 @@ const {
     end: endSession,
     requestStop: requestSessionStop,
     setStopHandler,
+    findRpcSession,
     elapsed: sessionElapsed,
     progress: sessionProgress,
     remaining: sessionRemaining,
@@ -229,11 +230,101 @@ async function playGame({ game, executable }: { game: Game, executable: GameExec
 
 const pendingStop = ref<{ game: Game, executable: GameExecutable } | null>(null);
 
+/**
+ * Games without a registered executable cannot be detected by Discord, so they are
+ * shown through Rich Presence instead. It is the only way to "play" those entries,
+ * and Discord may treat RPC-only activity as suspicious, so it is always opt-in.
+ */
+async function playViaRpc(game: Game | null) {
+    if (!game) {
+        return;
+    }
+    const running = findRpcSession();
+    if (running) {
+        pushToast('An RPC session is already running. Stop it first.', 'warning');
+        return;
+    }
+    // Discord shows "1 of N players" and a Join button when the activity carries a party.
+    // A max of 1 means "no party", so the presence stays a plain "playing" card.
+    const partyMax = Math.max(1, settings.partyMax);
+    const party = partyMax > 1 ? { size: 1, max: partyMax } : null;
+    try {
+        await invoke('connect_to_discord_rpc_3', {
+            activity_json: JSON.stringify({
+                app_id: game.id,
+                ...(party
+                    ? {
+                        partyId: `dqc-${game.id}-${Date.now()}`,
+                        partyCurrent: party.size,
+                        partyMax: party.max,
+                    }
+                    : {}),
+                joinSecret: randomString(12),
+            }),
+            action: 'connect',
+        });
+        const gameToPlay = gameList.value.find(g => g.id === game.id);
+        if (gameToPlay) {
+            gameToPlay.is_running = true;
+        }
+        isConnectedToRPC.value = true;
+        startSession(game, rpcExecutable(game), 'rpc', party);
+        addLog('info', `Playing ${game.name} through Discord RPC (no executable registered).`);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        addLog('error', `Failed to start RPC activity: ${message}`);
+        pushToast('Could not start RPC activity. Is Discord running?', 'error', 6000);
+    }
+}
+
+function stopRpcForGame(game: Game) {
+    const session = findRpcSession();
+    if (session && session.gameId === game.id) {
+        void stopPlaying({ game, executable: session.executable });
+        return;
+    }
+    void stopRpc({ gameId: game.id, gameName: game.name, executable: rpcExecutable(game) });
+}
+
+async function disconnectRpc(appId: string) {
+    await invoke('connect_to_discord_rpc_3', {
+        activity_json: JSON.stringify({ app_id: appId }),
+        action: 'disconnect',
+    });
+}
+
+async function stopRpc(session: { gameId: string; gameName: string; executable: GameExecutable }) {
+    try {
+        await disconnectRpc(session.gameId);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        addLog('error', `Failed to disconnect RPC activity: ${message}`);
+    }
+    isConnectedToRPC.value = false;
+    const gameToPlay = gameList.value.find(g => g.name === session.gameName);
+    if (gameToPlay) {
+        gameToPlay.is_running = false;
+    }
+    addLog('info', `Disconnected RPC activity for ${session.gameName}.`);
+}
+
 async function stopPlaying(
     { game, executable }: { game: Game, executable: GameExecutable },
     options: { confirmed?: boolean } = {},
 ) {
     if (!game) {
+        return;
+    }
+    const rpcSession = findRpcSession();
+    const isRpcSession = executable.os === 'rpc' || (rpcSession?.gameId === game.id && executable.name === rpcSession.executable.name);
+    if (isRpcSession) {
+        if (settings.confirmStop && !options.confirmed) {
+            pendingStop.value = { game, executable };
+            showDialog('confirm_stop');
+            return;
+        }
+        await stopRpc({ gameId: game.id, gameName: game.name, executable });
+        endSession(game, executable, 'rpc-disconnected');
         return;
     }
     if (settings.confirmStop && !options.confirmed) {
@@ -258,7 +349,7 @@ async function stopPlaying(
         } finally {
             gameToPlay.is_running = false;
             executableItem.is_running = false;
-            endSession(gameToPlay, executableItem);
+            endSession(gameToPlay, executableItem, 'stopped');
         }
     } else {
         sessions.value = sessions.value.filter(session => session.key !== `${game.id}:${executable.name}`);
@@ -276,10 +367,16 @@ async function handleTestRPC(game: Game | null) {
         return;
     }
     if (state === 'disconnect' || isConnecting.value) {
-        emit('event_disconnect');
+        try {
+            await disconnectRpc(game?.id ?? '0');
+        } catch (error) {
+            addLog('error', 'Failed to disconnect RPC: ' + (error instanceof Error ? error.message : String(error)));
+        }
 
         isConnectedToRPC.value = false;
-        game!.is_running = false;
+        if (game) {
+            game.is_running = false;
+        }
         isConnecting.value = false;
         return;
     }
@@ -345,9 +442,11 @@ function cancelPendingStop() {
 
 // Quests/Settings can request a stop without knowing how the process gets killed.
 setStopHandler(session => {
-    const game = gameList.value.find(item => item.uid === session.gameUid);
+    const game = gameList.value.find(item => item.uid === session.gameUid) ?? gameList.value.find(item => item.id === session.gameId);
     if (game) {
         void stopPlaying({ game, executable: session.executable });
+    } else {
+        void stopRpc({ gameId: session.gameId, gameName: session.gameName, executable: session.executable });
     }
 });
 
@@ -522,7 +621,7 @@ provide<GameActionsProvider>(GameActionsKey, {
                         <div class="divider my-4"></div>
 
                         <GameExecutables :game="selectedGame" @play="playGame" @stop="stopPlaying"
-                            @install_and_play="installAndPlay" />
+                            @install_and_play="installAndPlay" @play_rpc="playViaRpc" @stop_rpc="stopRpcForGame" />
                     </template>
                 </section>
 
@@ -542,8 +641,19 @@ provide<GameActionsProvider>(GameActionsKey, {
                         <article v-for="session in sessions" :key="session.key" class="panel-soft p-3" data-session>
                             <div class="flex items-center justify-between gap-2">
                                 <div class="min-w-0">
-                                    <p class="text-sm truncate" style="color: var(--text)">{{ session.gameName }}</p>
+                                    <p class="text-sm truncate flex items-center gap-1.5" style="color: var(--text)">
+                                        {{ session.gameName }}
+                                        <span class="chip" :class="session.mode === 'rpc' ? 'chip-warning' : 'chip-accent'">
+                                            {{ session.mode === 'rpc' ? 'RPC' : 'process' }}
+                                        </span>
+                                    </p>
                                     <p class="text-xs font-mono truncate faint">{{ session.executable.name }}</p>
+                                    <p class="text-xs faint">
+                                        started {{ formatStamp(session.startedAt) }}
+                                        <template v-if="session.party">
+                                            · party {{ session.party.size }} of {{ session.party.max }}
+                                        </template>
+                                    </p>
                                 </div>
                                 <button class="btn btn-danger text-xs shrink-0"
                                     @click="requestSessionStop(session)">Stop</button>

@@ -21,6 +21,13 @@
   --danger: #f23f43;
   --warning: #f0b232;
   color-scheme: dark;
+  /* Liquid glass: translucent surfaces over the tinted backdrop. */
+  --glass-surface: rgba(49, 51, 56, 0.62);
+  --glass-soft: rgba(56, 58, 64, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-highlight: rgba(255, 255, 255, 0.16);
+  --glass-shadow: 0 24px 50px -30px rgba(0, 0, 0, 0.85);
+  --glass-blur: 20px;
 }
 
 :root[data-theme="light"] {
@@ -38,6 +45,11 @@
   --danger: #d83c3e;
   --warning: #b7791f;
   color-scheme: light;
+  --glass-surface: rgba(255, 255, 255, 0.68);
+  --glass-soft: rgba(255, 255, 255, 0.58);
+  --glass-border: rgba(6, 6, 7, 0.1);
+  --glass-highlight: rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 24px 45px -32px rgba(20, 22, 26, 0.45);
 }
 
 html,
@@ -48,7 +60,13 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg-app);
+  /* The tinted backdrop is what makes the translucent panels read as glass. */
+  background:
+    radial-gradient(70rem 40rem at 6% -12%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%),
+    radial-gradient(55rem 34rem at 102% 2%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 58%),
+    radial-gradient(48rem 32rem at 60% 118%, rgba(35, 165, 90, 0.1), transparent 60%),
+    var(--bg-app);
+  background-attachment: fixed;
   color: var(--text);
   font-family: "gg sans", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -76,16 +94,60 @@ body {
 /* ---------------------------------------------------------------- *
  * Surfaces
  * ---------------------------------------------------------------- */
+.glass {
+  background:
+    linear-gradient(155deg, var(--glass-highlight), transparent 46%),
+    var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
+}
+
 .panel {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  background:
+    linear-gradient(155deg, var(--glass-highlight), transparent 46%),
+    var(--glass-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-highlight);
 }
 
 .panel-soft {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  background:
+    linear-gradient(155deg, rgba(255, 255, 255, 0.06), transparent 55%),
+    var(--glass-soft);
+  border: 1px solid var(--glass-border);
   border-radius: 12px;
+  backdrop-filter: blur(10px) saturate(130%);
+  -webkit-backdrop-filter: blur(10px) saturate(130%);
+}
+
+.sidebar-glass {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 32%),
+    color-mix(in srgb, var(--bg-sidebar) 74%, transparent);
+  border-right: 1px solid var(--glass-border);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dropdown-panel {
+  max-height: min(26rem, calc(100dvh - 13rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background:
+    linear-gradient(155deg, var(--glass-highlight), transparent 45%),
+    color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  border: 1px solid var(--glass-border);
+  border-radius: 14px;
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: 0 34px 70px -30px rgba(0, 0, 0, 0.8), inset 0 1px 0 var(--glass-highlight);
 }
 
 .panel-title {
@@ -141,9 +203,11 @@ body {
 }
 
 .btn-quiet {
-  background: var(--bg-elevated);
-  border-color: var(--border);
+  background: var(--glass-soft);
+  border-color: var(--glass-border);
   color: var(--text-muted);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 .btn-quiet:hover:not(:disabled) {
   background: var(--bg-hover);
@@ -171,8 +235,10 @@ body {
 .input {
   width: 100%;
   border-radius: 10px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-soft);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: var(--text);
   padding: 0.55rem 0.75rem;
   font-size: 0.875rem;
@@ -230,8 +296,8 @@ body {
   align-items: center;
   gap: 0.35rem;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-soft);
   color: var(--text-muted);
   padding: 0.15rem 0.55rem;
   font-size: 0.7rem;
@@ -255,6 +321,21 @@ body {
   border-color: transparent;
   background: rgba(240, 178, 50, 0.16);
   color: var(--warning);
+}
+
+/* One filled avatar in the Discord-style party row. */
+.party-member {
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-panel);
 }
 
 .dot {
@@ -334,8 +415,10 @@ body {
 }
 
 .game-card {
-  border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-soft);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-radius: 12px;
   cursor: pointer;
   transition: border-color 120ms ease, background-color 120ms ease;
@@ -351,10 +434,15 @@ body {
 }
 
 .dialog-surface {
-  background: var(--bg-panel);
+  background:
+    linear-gradient(155deg, var(--glass-highlight), transparent 45%),
+    color-mix(in srgb, var(--bg-panel) 86%, transparent);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  backdrop-filter: blur(26px) saturate(160%);
+  -webkit-backdrop-filter: blur(26px) saturate(160%);
+  box-shadow: 0 40px 80px -30px rgba(0, 0, 0, 0.8), inset 0 1px 0 var(--glass-highlight);
 }
 
 .dialog-surface::backdrop {
@@ -363,9 +451,13 @@ body {
 }
 
 .toast {
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
+  background:
+    linear-gradient(155deg, var(--glass-highlight), transparent 50%),
+    color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  border: 1px solid var(--glass-border);
   color: var(--text);
-  border-radius: 10px;
-  box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.6);
+  border-radius: 12px;
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.65), inset 0 1px 0 var(--glass-highlight);
 }

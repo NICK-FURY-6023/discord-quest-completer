@@ -359,80 +359,58 @@ async fn stop_process(exec_name: String) -> Result<(), String> {
     }
 }
 
-/// Usage: Calling from JS:
+/// Connects to (or disconnects from) Discord's local RPC socket and sets the activity.
+/// Returns an error instead of panicking, so the UI can tell the user why a game
+/// could not be shown through Rich Presence.
+///
+/// Calling from JS:
 /// ```javascript
-/// await invoke('connect_to_discord_rpc_3', json, 'connect' | 'disconnect');
+/// await invoke('connect_to_discord_rpc_3', { activity_json, action: 'connect' | 'disconnect' });
 #[tauri::command(rename_all = "snake_case")]
-fn connect_to_discord_rpc_3(handle: AppHandle, activity_json: String, action: String) {
-    let app = handle.clone();
-
-    let event_connecting = "client_connecting";
-    let event_connected = "client_connected";
-    let event_disconnect = "event_disconnect";
-    let event_connect = "event_connect";
-
-    let activity = runner::parse_activity_json(&activity_json).unwrap();
-
-    let connecting_payload = serde_json::json!({
-        "app_id": activity.app_id,
-    });
-
-    let client_option = {
-        let mut client_guard = get_discord_client().lock().unwrap();
-        // Take the client out, leaving None in its place
-        client_guard.take()
-        // MutexGuard is dropped here at the end of scope
-    };
-
-    let task = tauri::async_runtime::spawn(async move {
-        handle
-            .emit(event_connecting, connecting_payload)
-            .unwrap_or_else(|e| eprintln!("Failed to emit event: {}", e));
-
-        let client = runner::set_activity(activity_json)
-            .await
-            .map_err(|e| {
-                println!("Failed to set activity: {}", e);
-            })
-            .unwrap();
-
-        let connected_payload = serde_json::json!({
-            "app_id": activity.app_id,
-        });
-
-        {
-            let mut client_guard = get_discord_client().lock().unwrap();
-            *client_guard = Some(client);
+async fn connect_to_discord_rpc_3(
+    handle: AppHandle,
+    activity_json: String,
+    action: String,
+) -> Result<(), String> {
+    if action == "disconnect" {
+        let client = {
+            let mut guard = get_discord_client().lock().unwrap();
+            guard.take()
+        };
+        if let Some(client) = client {
+            client.discord.disconnect().await;
         }
+        return Ok(());
+    }
 
-        handle
-            .emit(event_connected, connected_payload)
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to emit event: {}", e);
-            });
+    let activity = runner::parse_activity_json(&activity_json)?;
 
-        handle.listen(event_disconnect, move |_| {
-            println!("Disconnecting from Discord RPC inner");
-            let disconnect_task = tauri::async_runtime::spawn(async move {
-                let client_option = {
-                    let mut client_guard = get_discord_client().lock().unwrap();
-                    // Take the client out, leaving None in its place
-                    client_guard.take()
-                    // MutexGuard is dropped here at the end of scope
-                };
-                if let Some(client) = client_option {
-                    client.discord.disconnect().await;
-                    println!("Disconnected from Discord RPC inner");
-                }
-            });
-            // disconnect_task.abort();
-        });
-    });
+    // Replace any previous connection instead of leaking it.
+    {
+        let mut guard = get_discord_client().lock().unwrap();
+        guard.take();
+    }
 
-    app.listen(event_disconnect, move |_| {
-        println!("Disconnecting from Discord RPC...");
-        task.abort();
-    });
+    let _ = handle.emit(
+        "client_connecting",
+        serde_json::json!({ "app_id": activity.app_id }),
+    );
+
+    let client = runner::set_activity(activity_json)
+        .await
+        .map_err(|e| format!("Discord RPC connection failed: {}", e))?;
+
+    {
+        let mut guard = get_discord_client().lock().unwrap();
+        *guard = Some(client);
+    }
+
+    let _ = handle.emit(
+        "client_connected",
+        serde_json::json!({ "app_id": activity.app_id }),
+    );
+
+    Ok(())
 }
 
 const GAMELIST_GH_MIRROR_URL: &str =

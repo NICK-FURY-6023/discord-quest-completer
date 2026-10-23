@@ -1,5 +1,5 @@
-use discord_sdk::activity::{ActivityBuilder, ActivityKind};
-use std::{fmt::Error, io::ErrorKind, ops::Deref};
+use discord_sdk::activity::{ActivityBuilder, ActivityKind, PartyPrivacy, Secrets};
+use std::{fmt::Error, io::ErrorKind, num::NonZeroU32, ops::Deref};
 
 use crate::rpc::{self, Client};
 use serde::Deserialize;
@@ -15,6 +15,16 @@ pub struct ActivityParams {
     pub large_image_text: Option<String>,
     pub timestamp: Option<i64>,
     pub activity_kind: Option<i32>,
+    /// Party / lobby information, so Discord can show "1 of 4" players.
+    #[serde(rename = "partyId")]
+    pub party_id: Option<String>,
+    #[serde(rename = "partyCurrent")]
+    pub party_current: Option<u32>,
+    #[serde(rename = "partyMax")]
+    pub party_max: Option<u32>,
+    /// Lets Discord offer an "Ask to Join" button for the activity.
+    #[serde(rename = "joinSecret")]
+    pub join_secret: Option<String>,
 }
 
 pub struct CreateActivityResult {
@@ -87,6 +97,27 @@ pub fn create_activity(activity_json: String) -> Result<CreateActivityResult, St
     if !large_image_key.is_empty() {
         rp = rp
             .assets(rpc::ds::activity::Assets::default().large(&large_image_key, large_image_text));
+    }
+
+    // party size ("1 of 4 players" in the Discord profile card)
+    if let (Some(current), Some(max)) = (activity.party_current, activity.party_max) {
+        if let (Some(current), Some(max)) = (NonZeroU32::new(current), NonZeroU32::new(max)) {
+            if current <= max {
+                let party_id = activity
+                    .party_id
+                    .filter(|id| !id.is_empty())
+                    .unwrap_or_else(|| format!("dqc-{}", app_id));
+                rp = rp.party(party_id, Some(current), Some(max), PartyPrivacy::Public);
+            }
+        }
+    }
+
+    // join secret, so Discord can render the Join / Ask to Join button
+    if let Some(join) = activity.join_secret.filter(|secret| !secret.is_empty()) {
+        rp = rp.secrets(Secrets {
+            join: Some(join),
+            ..Default::default()
+        });
     }
 
     Ok(CreateActivityResult {

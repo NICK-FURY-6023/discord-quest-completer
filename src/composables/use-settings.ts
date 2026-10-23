@@ -23,6 +23,8 @@ export interface AppSettings {
     accent: AccentName;
     /** Estimated length of a Discord quest, used for the progress display. */
     questMinutes: number;
+    /** Size of the party Discord shows in the presence card ("1 of N"). */
+    partyMax: number;
     notifyOnPlay: boolean;
     confirmStop: boolean;
     rememberGames: boolean;
@@ -34,6 +36,7 @@ const DEFAULTS: AppSettings = {
     theme: 'dark',
     accent: 'blurple',
     questMinutes: 15,
+    partyMax: 4,
     notifyOnPlay: true,
     confirmStop: false,
     rememberGames: true,
@@ -48,6 +51,7 @@ function loadSettings(): AppSettings {
             theme: parsed.theme === 'light' || parsed.theme === 'system' ? parsed.theme : 'dark',
             accent: parsed.accent && parsed.accent in ACCENTS ? parsed.accent : DEFAULTS.accent,
             questMinutes: clampMinutes(parsed.questMinutes),
+            partyMax: clampPartySize(parsed.partyMax),
             notifyOnPlay: parsed.notifyOnPlay !== false,
             confirmStop: parsed.confirmStop === true,
             rememberGames: parsed.rememberGames !== false,
@@ -61,6 +65,12 @@ export function clampMinutes(value: unknown): number {
     const minutes = Number(value);
     if (!Number.isFinite(minutes)) return DEFAULTS.questMinutes;
     return Math.min(Math.max(Math.round(minutes), 1), 240);
+}
+
+export function clampPartySize(value: unknown): number {
+    const size = Number(value);
+    if (!Number.isFinite(size)) return DEFAULTS.partyMax;
+    return Math.min(Math.max(Math.round(size), 1), 25);
 }
 
 function applyTheme(theme: 'dark' | 'light', accent: AccentOption) {
